@@ -20,7 +20,7 @@ Loop Engine will orchestrate coding agents such as Codex and Claude Code; it is 
 
 ## Status
 
-Loop Engine is pre-alpha and under active development. This repository currently contains design and planning documentation only; the runtime has not been implemented.
+Loop Engine is pre-alpha and under active development. The repository currently contains the initial core domain models; runtime orchestration has not been implemented.
 
 Installation and usage instructions will be added when an executable implementation exists. Until then, no installation process is implied or supported.
 
