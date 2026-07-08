@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "loop-engine"
 version = "0.1.0"
-description = "A lightweight runtime for orchestrating AI coding agents"
+description = "A lightweight runtime for long-horizon, evidence-driven goal pursuit"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }
