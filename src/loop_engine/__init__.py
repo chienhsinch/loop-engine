@@ -2,6 +2,7 @@
 
 from loop_engine.company_models import (
     CompanyState,
+    CompanyStateUpdate,
     Evidence,
     ExecutiveDecision,
     ExecutiveDecisionType,
@@ -10,6 +11,10 @@ from loop_engine.company_models import (
     MandateStatus,
     Objective,
     ObjectiveStatus,
+)
+from loop_engine.executive_loop import (
+    apply_executive_decision,
+    apply_objective_result,
 )
 from loop_engine.models import (
     Attempt,
@@ -29,6 +34,7 @@ __all__ = [
     "Attempt",
     "AttemptStatus",
     "CompanyState",
+    "CompanyStateUpdate",
     "Evidence",
     "ExecutiveDecision",
     "ExecutiveDecisionType",
@@ -46,4 +52,6 @@ __all__ = [
     "TestResult",
     "TransitionDecision",
     "TransitionType",
+    "apply_executive_decision",
+    "apply_objective_result",
 ]

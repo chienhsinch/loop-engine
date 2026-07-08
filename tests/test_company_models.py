@@ -1,9 +1,10 @@
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, fields
 
 import pytest
 
 from loop_engine.company_models import (
     CompanyState,
+    CompanyStateUpdate,
     Evidence,
     ExecutiveDecision,
     ExecutiveDecisionType,
@@ -69,6 +70,11 @@ def test_company_domain_models_can_be_constructed() -> None:
         open_questions=("Will users pay to replace the workaround?",),
         relevant_evidence_ids=(evidence.id,),
     )
+    state_update = CompanyStateUpdate(
+        "Demand evidence was collected",
+        facts=("Four interviewees use a workaround",),
+        relevant_evidence_ids=(evidence.id,),
+    )
 
     assert mandate.success_criteria == (
         "Demand is supported by customer evidence",
@@ -79,6 +85,17 @@ def test_company_domain_models_can_be_constructed() -> None:
     assert decision.objective_id == objective.id
     assert decision.supporting_evidence_ids == (evidence.id,)
     assert state.status is MandateStatus.ACTIVE
+    assert state_update.relevant_evidence_ids == (evidence.id,)
+
+
+def test_company_state_update_contains_only_snapshot_fields() -> None:
+    assert tuple(field.name for field in fields(CompanyStateUpdate)) == (
+        "summary",
+        "facts",
+        "assumptions",
+        "open_questions",
+        "relevant_evidence_ids",
+    )
 
 
 @pytest.mark.parametrize(
@@ -137,6 +154,10 @@ def test_company_domain_models_can_be_constructed() -> None:
         (
             lambda: CompanyState("mandate-1", MandateStatus.ACTIVE, ""),
             "company state summary",
+        ),
+        (
+            lambda: CompanyStateUpdate(""),
+            "company state update summary",
         ),
     ],
 )
@@ -407,6 +428,12 @@ def test_status_and_decision_fields_require_their_enum_types(
             MandateStatus.ACTIVE,
             "Summary",
             relevant_evidence_ids=["mutable"],
+        ),
+        lambda: CompanyStateUpdate("Summary", facts=["mutable"]),
+        lambda: CompanyStateUpdate("Summary", assumptions=["mutable"]),
+        lambda: CompanyStateUpdate("Summary", open_questions=["mutable"]),
+        lambda: CompanyStateUpdate(
+            "Summary", relevant_evidence_ids=["mutable"]
         ),
     ],
 )
