@@ -178,6 +178,27 @@ class HumanEscalation:
 
 
 @dataclass(frozen=True)
+class CompanyStateUpdate:
+    summary: str
+    facts: tuple[str, ...] = ()
+    assumptions: tuple[str, ...] = ()
+    open_questions: tuple[str, ...] = ()
+    relevant_evidence_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _require_text(self.summary, "company state update summary")
+        _require_text_items(self.facts, "company state update fact")
+        _require_text_items(self.assumptions, "company state update assumption")
+        _require_text_items(
+            self.open_questions, "company state update open question"
+        )
+        _require_text_items(
+            self.relevant_evidence_ids,
+            "company state update relevant evidence id",
+        )
+
+
+@dataclass(frozen=True)
 class CompanyState:
     mandate_id: str
     status: MandateStatus

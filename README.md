@@ -21,7 +21,7 @@ The existing task runtime remains part of the design as a lower-level execution 
 
 ## Status
 
-Loop Engine is pre-alpha and under active development. The current implementation contains the initial company-level domain models and the lower-level execution-domain models for goals, tasks, task graphs, attempts, review and test results, and transition decisions. The executive loop, persistence, and agent integrations described by the new architecture have not yet been implemented.
+Loop Engine is pre-alpha and under active development. The current implementation contains the initial company-level domain models, deterministic in-process executive transitions, and the lower-level execution-domain models for goals, tasks, task graphs, attempts, review and test results, and transition decisions. Model-backed executive decisions, delegated execution, persistence, and agent integrations have not yet been implemented.
 
 Installation and usage instructions will be added when an executable implementation exists. Until then, no installation process is implied or supported.
 
