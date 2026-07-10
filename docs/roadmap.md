@@ -14,17 +14,17 @@ Define minimal representations for owner mandates, company state, bounded object
 
 Implement an in-process loop that loads a mandate and company state, accepts a stubbed structured executive decision, authorizes at most one bounded objective, records evidence, applies a state update, and reaches continue, success, stop, and human-escalation paths. Validate decisions and state transitions before adding model-driven judgment.
 
-## Phase 3 — Codex-backed executive decision adapter
+## Phase 3 — Persistent company state
+
+Persist mandates, the current company state snapshot, objectives, evidence, executive decisions, and human escalations in a local inspectable format. Support resumption after interruption while preserving record provenance and keeping historical records separate from the replaceable current snapshot.
+
+## Phase 4 — Codex-backed executive decision adapter
 
 Add a narrow adapter that asks Codex to propose a structured executive decision from the mandate and current company state. Validate the proposal against allowed decision types, authority, budgets, and state invariants before committing it. Keep Codex-specific behavior behind the adapter boundary.
 
-## Phase 4 — Delegated worker execution
+## Phase 5 — Delegated worker execution
 
 Connect an authorized bounded objective to a dynamically selected worker. Route objectives that need structured planning, attempts, review, tests, or retry through the existing execution subsystem, then normalize their outcomes into objective-level evidence. Workers must not select the next company objective or change the mandate.
-
-## Phase 5 — Persistent company state
-
-Persist mandates, company state updates, objectives, evidence, executive decisions, and links to lower-level execution history. Support inspection and resumption after interruption while preserving the provenance of decision-relevant facts.
 
 ## Phase 6 — Budget controls and human escalation
 

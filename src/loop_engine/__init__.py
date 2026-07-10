@@ -12,6 +12,7 @@ from loop_engine.company_models import (
     Objective,
     ObjectiveStatus,
 )
+from loop_engine.company_store import CompanyStore, FileCompanyStore
 from loop_engine.executive_loop import (
     apply_executive_decision,
     apply_objective_result,
@@ -35,9 +36,11 @@ __all__ = [
     "AttemptStatus",
     "CompanyState",
     "CompanyStateUpdate",
+    "CompanyStore",
     "Evidence",
     "ExecutiveDecision",
     "ExecutiveDecisionType",
+    "FileCompanyStore",
     "GateStatus",
     "Goal",
     "HumanEscalation",
