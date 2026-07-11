@@ -24,7 +24,7 @@ Implemented local JSON persistence for mandates, the current company-state snaps
 
 Completed the v0.3 boundary: Loop Engine owns the durable mandate, decision-relevant workspace, decision history, evidence references, authority boundaries, human escalation, and the outer loop. Bounded execution is delegated to capable existing agents and tools. `TaskGraph` remains optional, and broader frameworks remain deferred until a real use case provides evidence for them.
 
-## Current phase
+## Completed integration phases
 
 ### Phase 5 - End-to-end executive vertical slice
 
@@ -40,11 +40,11 @@ Implemented the shortest concrete path through two evidence-linked executive cyc
 
 The implementation uses canned subprocess outputs in normal orchestration tests and never calls the real Codex service during pytest. A real Phase 5 smoke run completed successfully on Windows; subprocess output is decoded explicitly as UTF-8 so the run does not depend on `PYTHONUTF8`. The slice intentionally does not introduce a generic worker protocol or route the objective through `TaskGraph`.
 
-## Next phases
-
 ### Phase 6 - Durable multi-cycle run
 
-Turn the vertical slice into a resumable runner that can cross process interruptions and repeat the executive -> objective -> execution -> evidence -> state-update cycle. Preserve authority checks, deterministic transition validation, and focused human escalation while keeping integrations concrete and minimal.
+Implemented a concrete foreground Codex runner that crosses process interruptions and repeats the executive -> objective -> execution -> evidence -> state-update cycle. It uses an atomic local checkpoint, deterministic cycle IDs, protected-file snapshots, cycle-isolated artifacts, and idempotent replay. `--max-cycles` counts committed objective executions and stabilizes the workspace by persisting the next executive outcome before exit. The demonstration remains synthetic, retains the immutable Objective lifecycle limitation, and does not resolve escalations.
+
+## Next phases
 
 ### Phase 7 - Real product-validation mandate
 

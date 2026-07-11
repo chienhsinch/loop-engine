@@ -35,7 +35,7 @@ The durable workspace is the executive agent's persistent decision context. It c
 
 The workspace is not an unrestricted transcript and need not copy every external artifact into Loop Engine storage. Large outputs may remain in their native repository, document store, or tool environment as long as the evidence record contains a durable, inspectable reference and enough context for the executive to interpret it.
 
-The current implementation provides immutable company-domain records, a replaceable `CompanyState` snapshot, deterministic transition validation, and local JSON persistence. Dedicated artifact-reference fields and an end-to-end workspace runner are not yet implemented.
+The current implementation provides immutable company-domain records, a replaceable `CompanyState` snapshot, deterministic transition validation, local JSON persistence, and one concrete resumable Codex runner. Dedicated artifact-reference domain fields are not implemented; the runner retains cycle-specific relative paths in evidence provenance.
 
 ## Executive cycle
 
@@ -125,7 +125,7 @@ The vertical slice runs two executive cycles around one bounded execution, persi
 
 The existing immutable Objective persistence has a known lifecycle limitation in this slice. Objective 1 remains persisted in its original pending form; a terminal-status copy is constructed only in memory for the existing objective-result transition. Version 0.3 preserves that limitation rather than adding a new domain record or redesigning `Objective`.
 
-The next architectural proof after a real local smoke run is a resumable multi-cycle runner followed by one real product-validation mandate. Additional worker types, richer budgets, `TaskGraph` integration, sophisticated escalation resolution, and parallel execution still require evidence from these concrete runs.
+The resumable multi-cycle runner is implemented as a foreground, manually invoked Codex integration with a small atomic orchestration checkpoint. The next architectural proof is one real product-validation mandate. Additional worker types, richer budgets, `TaskGraph` integration, escalation resolution, background operation, and parallel execution still require evidence from concrete runs.
 
 ## Intentionally deferred abstractions
 
