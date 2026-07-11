@@ -37,6 +37,8 @@ The workspace is not an unrestricted transcript and need not copy every external
 
 The current implementation provides immutable company-domain records, a replaceable `CompanyState` snapshot, deterministic transition validation, local JSON persistence, and one concrete resumable Codex runner. Dedicated artifact-reference domain fields are not implemented; the runner retains cycle-specific relative paths in evidence provenance.
 
+For the concrete resumable Codex runner, bounded execution receives workspace-write access only to a dedicated `execution-workspace/`. The company store, orchestration checkpoint, canonical inputs, and executive outputs remain in the durable root outside that writable boundary. Protected-file hashing and symlink checks remain defense in depth; this separation is not a claim of container-level isolation or a general sandbox architecture.
+
 ## Executive cycle
 
 One executive cycle is:

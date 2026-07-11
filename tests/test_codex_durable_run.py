@@ -39,10 +39,11 @@ def execution(cycle):
 
 class FakeCodex:
     def __init__(self, proposals):
-        self.proposals = iter(proposals); self.calls = []
+        self.proposals = iter(proposals); self.calls = []; self.commands = []
 
     def __call__(self, command, prompt):
         self.calls.append(prompt)
+        self.commands.append(command)
         output = Path(command[command.index("--output-last-message") + 1])
         if "executive" in prompt.lower() and "Select exactly one" in prompt:
             payload = next(self.proposals)
@@ -55,6 +56,50 @@ class FakeCodex:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(payload), encoding="utf-8")
         return subprocess.CompletedProcess(command, 0, "", "")
+
+
+def test_execution_workspace_is_physically_separate_and_inputs_match(tmp_path):
+    fake = FakeCodex([proposal("Objective one"), proposal("Objective two")])
+    run_durable_cycles(tmp_path, max_cycles=1, command_function=fake)
+
+    executive = next(command for command in fake.commands if command[command.index("--sandbox") + 1] == "read-only")
+    execution_command = next(command for command in fake.commands if command[command.index("--sandbox") + 1] == "workspace-write")
+    assert Path(executive[executive.index("--cd") + 1]) == tmp_path.resolve()
+    assert Path(execution_command[execution_command.index("--cd") + 1]) == (tmp_path / "execution-workspace").resolve()
+    assert not (tmp_path / "execution-workspace/company-store").exists()
+    assert not (tmp_path / "execution-workspace" / CHECKPOINT_NAME).exists()
+    assert not (tmp_path / "execution-workspace/candidate-brief.md").exists()
+    assert (tmp_path / "candidate-brief.md").read_bytes() == (
+        tmp_path / "execution-workspace/authorized-inputs/candidate-brief.md"
+    ).read_bytes()
+    evidence = FileCompanyStore(tmp_path / "company-store").load_evidence(
+        durable.MANDATE_ID, "evidence-1-1"
+    )
+    assert "execution-workspace/artifacts/cycle-1/result.md" in evidence.source
+    assert "authorized-inputs/candidate-brief.md" in next(
+        prompt for prompt in fake.calls if "Execute only" in prompt
+    )
+
+
+def test_differing_authorized_input_is_rejected_without_overwrite(tmp_path):
+    authorized = tmp_path / "execution-workspace/authorized-inputs/candidate-brief.md"
+    authorized.parent.mkdir(parents=True)
+    authorized.write_bytes(b"user content")
+    with pytest.raises(CodexDurableRunError, match="authorized candidate-brief.md differs"):
+        run_durable_cycles(tmp_path, max_cycles=1, command_function=FakeCodex([]))
+    assert authorized.read_bytes() == b"user content"
+
+
+def test_legacy_phase6_layout_is_rejected_explicitly(tmp_path):
+    run_durable_cycles(
+        tmp_path, max_cycles=1,
+        command_function=FakeCodex([proposal(kind="stop")]),
+    )
+    legacy = tmp_path / ".codex-output/execution-1.json"
+    legacy.parent.mkdir(exist_ok=True)
+    legacy.write_text("{}", encoding="utf-8")
+    with pytest.raises(CodexDurableRunError, match="legacy Phase 6 workspace layout"):
+        run_durable_cycles(tmp_path, max_cycles=1, command_function=FakeCodex([]))
 
 
 def test_two_process_style_invocations_resume_without_repeating(tmp_path):
@@ -70,8 +115,8 @@ def test_two_process_style_invocations_resume_without_repeating(tmp_path):
     assert second.executed_objective_ids == ("objective-2",)
     assert second.next_active_objective_id == "objective-3"
     assert not any("Cycle: 2" in call for call in fake2.calls)
-    assert (tmp_path / ".codex-output/execution-1.json").is_file()
-    assert (tmp_path / "artifacts/cycle-2/result.md").is_file()
+    assert (tmp_path / "execution-workspace/.codex-output/execution-1.json").is_file()
+    assert (tmp_path / "execution-workspace/artifacts/cycle-2/result.md").is_file()
 
 
 def test_stop_decision_is_durable_and_rerun_is_quiet(tmp_path):
@@ -95,6 +140,42 @@ def test_human_escalation_is_durable_and_rerun_is_quiet(tmp_path):
     quiet = FakeCodex([])
     run_durable_cycles(tmp_path, max_cycles=1, command_function=quiet)
     assert quiet.calls == []
+
+
+def test_terminal_resume_does_not_resolve_or_invoke_codex(tmp_path, monkeypatch):
+    run_durable_cycles(
+        tmp_path, max_cycles=1,
+        command_function=FakeCodex([proposal(kind="stop")]),
+    )
+    monkeypatch.setattr(durable.shutil, "which", lambda name: None)
+    monkeypatch.setattr(
+        durable, "_run_subprocess",
+        lambda command, prompt: pytest.fail("Codex subprocess must not run"),
+    )
+
+    result = run_durable_cycles(tmp_path, max_cycles=1)
+
+    assert result.ending_stage == "terminal"
+
+
+def test_needs_human_resume_does_not_resolve_or_invoke_codex(tmp_path, monkeypatch):
+    value = proposal(kind="human_escalation")
+    value["human_escalation"] = {
+        "question": "Choose?", "reason": "Owner judgment",
+        "evidence_ids": [], "options": ["A", "B"],
+    }
+    run_durable_cycles(
+        tmp_path, max_cycles=1, command_function=FakeCodex([value])
+    )
+    monkeypatch.setattr(durable.shutil, "which", lambda name: None)
+    monkeypatch.setattr(
+        durable, "_run_subprocess",
+        lambda command, prompt: pytest.fail("Codex subprocess must not run"),
+    )
+
+    result = run_durable_cycles(tmp_path, max_cycles=1)
+
+    assert result.ending_stage == "needs_human"
 
 
 def test_success_at_executive_cycle_one_is_rejected(tmp_path):
@@ -162,7 +243,7 @@ def test_existing_execution_output_is_reused(tmp_path):
     # Stop immediately after authorization by directly creating a max-limit state through one terminal-free run setup.
     run_durable_cycles(tmp_path, max_cycles=1, command_function=initial)
     # The first invocation leaves objective 2 active. Create its output and artifact before resume.
-    artifact = tmp_path / "artifacts/cycle-2/result.md"
+    artifact = tmp_path / "execution-workspace/artifacts/cycle-2/result.md"
     artifact.parent.mkdir(parents=True, exist_ok=True); artifact.write_text("cycle 2", encoding="utf-8")
     # A first resume call is needed to save the durable guard; simulate a crash from the command.
     def crash(command, prompt):
@@ -183,10 +264,10 @@ def test_existing_execution_output_without_durable_guard_is_rejected(tmp_path):
         max_cycles=1,
         command_function=FakeCodex([proposal(), proposal("Objective two")]),
     )
-    artifact = tmp_path / "artifacts/cycle-2/result.md"
+    artifact = tmp_path / "execution-workspace/artifacts/cycle-2/result.md"
     artifact.parent.mkdir(parents=True, exist_ok=True)
     artifact.write_text("orphaned", encoding="utf-8")
-    output = tmp_path / ".codex-output/execution-2.json"
+    output = tmp_path / "execution-workspace/.codex-output/execution-2.json"
     output.write_text(json.dumps(execution(2)), encoding="utf-8")
     quiet = FakeCodex([])
 
@@ -426,6 +507,25 @@ def test_execution_captured_before_domain_commit_does_not_repeat_execution(
     assert all("Execute only" not in call for call in fake.calls)
 
 
+def test_contradictory_execution_captured_state_creates_no_evidence_or_checkpoint_advance(
+    tmp_path, monkeypatch
+):
+    _leave_execution_captured(tmp_path, monkeypatch)
+    store = FileCompanyStore(tmp_path / "company-store")
+    state = store.load_state(durable.MANDATE_ID)
+    store.save_state(durable.replace(state, summary="contradictory state"))
+    checkpoint_before = (tmp_path / CHECKPOINT_NAME).read_bytes()
+
+    with pytest.raises(
+        CodexDurableRunError, match="expected pre-result and post-result"
+    ):
+        run_durable_cycles(tmp_path, max_cycles=1, command_function=FakeCodex([]))
+
+    with pytest.raises(FileNotFoundError):
+        store.load_evidence(durable.MANDATE_ID, "evidence-1-1")
+    assert (tmp_path / CHECKPOINT_NAME).read_bytes() == checkpoint_before
+
+
 def _leave_execution_captured_after_domain_commit(tmp_path, monkeypatch):
     original = durable._save_checkpoint
 
@@ -467,7 +567,7 @@ def test_reconciled_result_does_not_consume_max_cycle_budget(
     assert result.next_active_objective_id == "objective-3"
     assert sum("Execute only" in call for call in fake.calls) == 1
     assert "cycle 2" in next(call for call in fake.calls if "Execute only" in call)
-    assert not (tmp_path / ".codex-output/execution-3.json").exists()
+    assert not (tmp_path / "execution-workspace/.codex-output/execution-3.json").exists()
 
 
 @pytest.mark.parametrize(
@@ -591,9 +691,9 @@ def test_atomic_checkpoint_replace_failure_preserves_prior_file(
 @pytest.mark.parametrize(
     "target",
     [
-        "artifacts/cycle-1/result.md",
-        ".codex-output/executive-1.json",
-        ".codex-output/execution-1.json",
+        "execution-workspace/artifacts/cycle-1/result.md",
+        "execution-workspace/.codex-output/execution-1.json",
+        "execution-workspace/authorized-inputs/candidate-brief.md",
     ],
 )
 def test_later_cycle_rejects_modified_prior_files(tmp_path, target):
@@ -606,7 +706,7 @@ def test_later_cycle_rejects_modified_prior_files(tmp_path, target):
         output = Path(command[command.index("--output-last-message") + 1])
         protected = tmp_path / target
         protected.write_text(protected.read_text(encoding="utf-8") + "changed", encoding="utf-8")
-        artifact = tmp_path / "artifacts/cycle-2/result.md"
+        artifact = tmp_path / "execution-workspace/artifacts/cycle-2/result.md"
         artifact.parent.mkdir(parents=True, exist_ok=True)
         artifact.write_text("cycle 2", encoding="utf-8")
         output.write_text(json.dumps(execution(2)), encoding="utf-8")
@@ -624,8 +724,8 @@ def test_later_cycle_rejects_unexpected_root_file(tmp_path):
 
     def add_root_file(command, prompt):
         output = Path(command[command.index("--output-last-message") + 1])
-        (tmp_path / "unexpected.txt").write_text("unexpected", encoding="utf-8")
-        artifact = tmp_path / "artifacts/cycle-2/result.md"
+        (tmp_path / "execution-workspace/unexpected.txt").write_text("unexpected", encoding="utf-8")
+        artifact = tmp_path / "execution-workspace/artifacts/cycle-2/result.md"
         artifact.parent.mkdir(parents=True, exist_ok=True)
         artifact.write_text("cycle 2", encoding="utf-8")
         output.write_text(json.dumps(execution(2)), encoding="utf-8")
@@ -633,6 +733,44 @@ def test_later_cycle_rejects_unexpected_root_file(tmp_path):
 
     with pytest.raises(CodexDurableRunError, match="protected files"):
         run_durable_cycles(tmp_path, max_cycles=1, command_function=add_root_file)
+
+
+def test_bounded_execution_rejects_modified_durable_executive_output(tmp_path):
+    run_durable_cycles(
+        tmp_path, max_cycles=1,
+        command_function=FakeCodex([proposal(), proposal("Objective two")]),
+    )
+
+    def mutate_durable(command, prompt):
+        output = Path(command[command.index("--output-last-message") + 1])
+        executive = tmp_path / ".codex-output/executive-1.json"
+        executive.write_text(executive.read_text(encoding="utf-8") + "changed", encoding="utf-8")
+        artifact = tmp_path / "execution-workspace/artifacts/cycle-2/result.md"
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text("cycle 2", encoding="utf-8")
+        output.write_text(json.dumps(execution(2)), encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    with pytest.raises(CodexDurableRunError, match="durable files"):
+        run_durable_cycles(tmp_path, max_cycles=1, command_function=mutate_durable)
+
+
+def test_nested_artifact_excerpt_is_supplied_to_next_executive(tmp_path):
+    class Nested(FakeCodex):
+        def __call__(self, command, prompt):
+            completed = super().__call__(command, prompt)
+            output = Path(command[command.index("--output-last-message") + 1])
+            if output.name == "execution-1.json":
+                nested = output.parents[1] / "artifacts/cycle-1/report/summary.md"
+                nested.parent.mkdir(parents=True)
+                nested.write_text("NESTED ARTIFACT CONTENT", encoding="utf-8")
+            return completed
+
+    fake = Nested([proposal("Objective one"), proposal("Objective two")])
+    run_durable_cycles(tmp_path, max_cycles=1, command_function=fake)
+    second_prompt = next(prompt for prompt in fake.calls if "Cycle: 2" in prompt)
+    assert "artifacts/cycle-1/report/summary.md" in second_prompt
+    assert "NESTED ARTIFACT CONTENT" in second_prompt
 
 
 def test_later_cycle_rejects_reported_artifact_outside_cycle(tmp_path):
@@ -662,7 +800,7 @@ def test_later_cycle_rejects_symlink_artifact(tmp_path):
 
     def create_symlink(command, prompt):
         output = Path(command[command.index("--output-last-message") + 1])
-        directory = tmp_path / "artifacts/cycle-2"
+        directory = tmp_path / "execution-workspace/artifacts/cycle-2"
         directory.mkdir(parents=True, exist_ok=True)
         target = directory / "target.md"
         target.write_text("target", encoding="utf-8")
@@ -678,12 +816,26 @@ def test_later_cycle_rejects_symlink_artifact(tmp_path):
         run_durable_cycles(tmp_path, max_cycles=1, command_function=create_symlink)
 
 
+def test_symlinked_execution_workspace_root_is_rejected(tmp_path):
+    target = tmp_path / "symlink-target"
+    target.mkdir()
+    execution_workspace = tmp_path / "execution-workspace"
+    try:
+        execution_workspace.symlink_to(target, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+
+    with pytest.raises(CodexDurableRunError, match="must not be a symlink"):
+        run_durable_cycles(tmp_path, max_cycles=1, command_function=FakeCodex([]))
+    assert list(target.iterdir()) == []
+
+
 def test_max_cycles_one_commits_one_and_only_authorizes_next(tmp_path):
     fake = FakeCodex([proposal("One"), proposal("Two")])
     result = run_durable_cycles(tmp_path, max_cycles=1, command_function=fake)
     assert result.executed_objective_ids == ("objective-1",)
     assert result.next_active_objective_id == "objective-2"
-    assert not (tmp_path / ".codex-output/execution-2.json").exists()
+    assert not (tmp_path / "execution-workspace/.codex-output/execution-2.json").exists()
     assert sum("Execute only" in call for call in fake.calls) == 1
 
 
