@@ -104,7 +104,6 @@ def run_durable_cycles(
     store, mandate, checkpoint = _initialize_or_resume(root, fixture)
     starting = checkpoint
     _validate_checkpoint(checkpoint, store, root, mandate)
-    executable = _resolve_codex(codex_executable, command_function)
     executed: list[str] = []
     created_evidence: list[str] = []
     committed = 0
@@ -118,14 +117,14 @@ def run_durable_cycles(
             break
         if checkpoint.stage == "awaiting_executive":
             checkpoint = _capture_executive(
-                root, store, mandate, checkpoint, executable,
+                root, store, mandate, checkpoint, codex_executable,
                 schemas / "executive_proposal.schema.json", command_function,
             )
         elif checkpoint.stage == "proposal_captured":
             checkpoint = _commit_proposal(root, store, mandate, checkpoint)
         elif checkpoint.stage == "objective_active":
             checkpoint = _capture_execution(
-                root, store, mandate, checkpoint, executable,
+                root, store, mandate, checkpoint, codex_executable,
                 schemas / "execution_result.schema.json", command_function,
             )
         elif checkpoint.stage == "execution_captured":
@@ -153,6 +152,7 @@ def _initialize_or_resume(root: Path, fixture: Path):
     store_root = root / "company-store"
     records_exist = store_root.exists() and any(store_root.rglob("*"))
     if checkpoint_path.exists():
+        _reject_legacy_layout(root)
         if not records_exist:
             raise CodexDurableRunError("checkpoint exists but company records are missing")
         store = FileCompanyStore(store_root)
@@ -162,13 +162,21 @@ def _initialize_or_resume(root: Path, fixture: Path):
             store.load_state(checkpoint.mandate_id)
         except (FileNotFoundError, ValueError) as exc:
             raise CodexDurableRunError("checkpoint references missing mandate or state") from exc
+        _ensure_authorized_input(root)
         return store, mandate, checkpoint
     if records_exist:
         raise CodexDurableRunError("company records exist but the runner checkpoint is missing")
 
     root.mkdir(parents=True, exist_ok=True)
     candidate = root / "candidate-brief.md"
-    candidate.write_text(fixture.read_text(encoding="utf-8"), encoding="utf-8")
+    fixture_bytes = fixture.read_bytes()
+    if candidate.exists() and candidate.read_bytes() != fixture_bytes:
+        raise CodexDurableRunError(
+            "canonical candidate-brief.md already exists with different content"
+        )
+    if not candidate.exists():
+        candidate.write_bytes(fixture_bytes)
+    _ensure_authorized_input(root)
     mandate = _phase6_mandate()
     state = CompanyState(
         mandate_id=mandate.id, status=MandateStatus.ACTIVE,
@@ -217,11 +225,12 @@ def _phase6_mandate() -> Mandate:
     )
 
 
-def _capture_executive(root, store, mandate, checkpoint, executable, schema, command_function):
+def _capture_executive(root, store, mandate, checkpoint, codex_executable, schema, command_function):
     state = store.load_state(mandate.id)
     evidence = tuple(store.load_evidence(mandate.id, item) for item in state.relevant_evidence_ids)
     output = root / ".codex-output" / f"executive-{checkpoint.cycle_number}.json"
     if not output.exists():
+        executable = _resolve_codex(codex_executable, command_function)
         _invoke(executable, _executive_prompt(mandate, state, evidence, _artifact_excerpts(root), checkpoint.cycle_number),
                 root, schema, output, "read-only", command_function, "executive")
     proposal = parse_executive_proposal(output)
@@ -260,25 +269,29 @@ def _commit_proposal(root, store, mandate, checkpoint):
     return result
 
 
-def _capture_execution(root, store, mandate, checkpoint, executable, schema, command_function):
+def _capture_execution(root, store, mandate, checkpoint, codex_executable, schema, command_function):
     cycle = checkpoint.cycle_number
     objective = store.load_objective(mandate.id, f"objective-{cycle}")
-    output = root / ".codex-output" / f"execution-{cycle}.json"
+    execution_root = _execution_workspace(root)
+    output = _execution_output(root, cycle)
     if checkpoint.protected_file_hashes is None:
         if output.exists():
             raise CodexDurableRunError(
                 "execution output exists without a durable pre-execution guard"
             )
-        hashes = _snapshot_protected(root, cycle, output)
+        hashes = _snapshot_protected(execution_root, cycle, output)
         checkpoint = replace(checkpoint, protected_file_hashes=hashes)
         _save_checkpoint(root / CHECKPOINT_NAME, checkpoint)
     assert checkpoint.protected_file_hashes is not None
     _verify_protected(root, cycle, output, checkpoint.protected_file_hashes)
     if not output.exists():
+        executable = _resolve_codex(codex_executable, command_function)
+        durable_hashes = _snapshot_durable(root)
         _invoke(executable, _execution_prompt(mandate, objective, store.load_state(mandate.id), cycle),
-                root, schema, output, "workspace-write", command_function, "bounded execution")
+                execution_root, schema, output, "workspace-write", command_function, "bounded execution")
         _verify_protected(root, cycle, output, checkpoint.protected_file_hashes)
-    execution = _parse_cycle_execution(output, root, cycle)
+        _verify_durable(root, durable_hashes)
+    execution = _parse_cycle_execution(output, execution_root, cycle)
     result = replace(checkpoint, stage="execution_captured",
                      captured_execution_result=execution, protected_file_hashes=None)
     _save_checkpoint(root / CHECKPOINT_NAME, result)
@@ -301,29 +314,24 @@ def _commit_execution(root, store, mandate, checkpoint):
     evidence, update = _execution_records(
         execution, expected_active_state, objective, decision, cycle
     )
+    expected_state = apply_objective_result(
+        expected_active_state,
+        replace(objective, status=ObjectiveStatus.SUCCEEDED),
+        evidence,
+        update,
+    )
+    if state not in (expected_active_state, expected_state):
+        raise CodexDurableRunError(
+            "execution checkpoint contradicts expected pre-result and post-result company state"
+        )
     for item in evidence:
         store.save_evidence(item)
-    if state.active_objective_id == objective.id:
-        if state != expected_active_state:
-            raise CodexDurableRunError(
-                "execution checkpoint contradicts pre-result company state"
-            )
-        updated = apply_objective_result(
-            state, replace(objective, status=ObjectiveStatus.SUCCEEDED), evidence, update
-        )
-        store.save_state(updated)
-    else:
-        expected_state = apply_objective_result(
-            expected_active_state,
-            replace(objective, status=ObjectiveStatus.SUCCEEDED),
-            evidence,
-            update,
-        )
-        if state != expected_state:
-            raise CodexDurableRunError("execution checkpoint contradicts company state")
+    newly_committed = state == expected_active_state
+    if newly_committed:
+        store.save_state(expected_state)
     result = RunCheckpoint(1, mandate.id, cycle + 1, "awaiting_executive")
     _save_checkpoint(root / CHECKPOINT_NAME, result)
-    return objective.id, tuple(item.id for item in evidence), state == expected_active_state
+    return objective.id, tuple(item.id for item in evidence), newly_committed
 
 
 def _reconstruct_pre_execution_state(root, store, mandate, cycle):
@@ -348,8 +356,8 @@ def _reconstruct_pre_execution_state(root, store, mandate, cycle):
         )
         state = replace(state, active_objective_id=objective.id)
         result = _parse_cycle_execution(
-            root / ".codex-output" / f"execution-{prior_cycle}.json",
-            root,
+            _execution_output(root, prior_cycle),
+            _execution_workspace(root),
             prior_cycle,
         )
         evidence, update = _execution_records(
@@ -369,11 +377,12 @@ def _execution_records(execution, state, objective, decision, cycle):
     observations = tuple(execution["observations"])
     facts = tuple(execution["facts"])
     claims = observations + tuple(f"Worker-reported fact, not independently verified: {x}" for x in facts)
-    source = f"codex-exec:{objective.id}; artifacts=" + ",".join(paths)
+    persistent_paths = tuple(f"execution-workspace/{path}" for path in paths)
+    source = f"codex-exec:{objective.id}; artifacts=" + ",".join(persistent_paths)
     evidence = tuple(Evidence(f"evidence-{cycle}-{i}", state.mandate_id, source, item,
                               objective_id=objective.id, decision_id=decision.id)
                      for i, item in enumerate(claims, 1))
-    verified = f"Codex created {len(paths)} verified artifact file(s) for {objective.id}: {', '.join(paths)}."
+    verified = f"Codex created {len(paths)} verified artifact file(s) for {objective.id}: {', '.join(persistent_paths)}."
     update = CompanyStateUpdate(
         summary=f"Objective {cycle} execution completed. Codex reported: {execution['summary']}",
         facts=_dedupe(state.facts + (verified,)),
@@ -494,13 +503,14 @@ def _save_checkpoint(path: Path, checkpoint: RunCheckpoint) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _snapshot_protected(root: Path, cycle: int, output: Path):
-    allowed = root / "artifacts" / f"cycle-{cycle}"
+def _snapshot_protected(execution_root: Path, cycle: int, output: Path):
+    _reject_symlinks(execution_root)
+    allowed = _cycle_artifact_directory(execution_root.parent, cycle)
     result = {}
-    for path in _files(root):
+    for path in _files(execution_root):
         if path == output or _inside(path, allowed):
             continue
-        result[path.relative_to(root).as_posix()] = _hash(path)
+        result[path.relative_to(execution_root).as_posix()] = _hash(path)
     return result
 
 
@@ -510,24 +520,48 @@ def _verify_protected(root: Path, cycle: int, output: Path, expected):
             or checkpoint.cycle_number != cycle
             or checkpoint.protected_file_hashes != expected):
         raise CodexDurableRunError("bounded execution modified the runner checkpoint")
-    allowed = root / "artifacts" / f"cycle-{cycle}"
-    unexpected_links = [
-        path.relative_to(root).as_posix() for path in root.rglob("*")
-        if path.is_symlink() and not _inside(path, allowed)
-    ]
-    if unexpected_links:
-        raise CodexDurableRunError(
-            "bounded execution created protected symlink(s): "
-            + ", ".join(sorted(unexpected_links))
-        )
-    current = _snapshot_protected(root, cycle, output)
-    # The checkpoint's contents are validated above. Its hash necessarily changes
-    # once the snapshot is embedded into that same checkpoint.
-    checkpoint_key = CHECKPOINT_NAME
-    current.pop(checkpoint_key, None); expected = dict(expected); expected.pop(checkpoint_key, None)
+    execution_root = _execution_workspace(root)
+    _reject_symlinks(execution_root)
+    current = _snapshot_protected(execution_root, cycle, output)
     if current != expected:
         changed = sorted(set(current) ^ set(expected) | {k for k in set(current) & set(expected) if current[k] != expected[k]})
         raise CodexDurableRunError("bounded execution modified protected files: " + ", ".join(changed))
+
+
+def _snapshot_durable(root: Path) -> dict[str, str]:
+    """Snapshot durable files after the runner has written its execution guard."""
+    result = {}
+    execution_root = _execution_workspace(root)
+    for path in _files(root):
+        if _inside(path, execution_root):
+            continue
+        result[path.relative_to(root).as_posix()] = _hash(path)
+    return result
+
+
+def _verify_durable(root: Path, expected: dict[str, str]) -> None:
+    current = _snapshot_durable(root)
+    if current != expected:
+        changed = sorted(
+            set(current) ^ set(expected)
+            | {key for key in set(current) & set(expected) if current[key] != expected[key]}
+        )
+        raise CodexDurableRunError(
+            "bounded execution modified durable files: " + ", ".join(changed)
+        )
+
+
+def _reject_symlinks(root: Path) -> None:
+    _validate_execution_workspace_root(root)
+    links = sorted(
+        path.relative_to(root).as_posix()
+        for path in root.rglob("*")
+        if path.is_symlink()
+    )
+    if links:
+        raise CodexDurableRunError(
+            "execution-workspace contains symlink(s): " + ", ".join(links)
+        )
 
 
 def _files(root):
@@ -543,6 +577,7 @@ def _hash(path):
 
 
 def _parse_cycle_execution(path: Path, root: Path, cycle: int):
+    _reject_symlinks(root)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -660,14 +695,17 @@ def _executive_prompt(mandate, state, evidence, excerpts, cycle):
 def _execution_prompt(mandate, objective, state, cycle):
     return (f"Execute only this bounded objective for cycle {cycle}.\nMandate: {_json_value(asdict(mandate))}\n"
             f"Objective: {_json_value(asdict(objective))}\nState: {_json_value(asdict(state))}\n"
-            f"You may write only under artifacts/cycle-{cycle}/ and must report paths relative to the workspace. "
+            "The only authorized input is authorized-inputs/candidate-brief.md, relative to this execution workspace. "
+            f"You may write only under artifacts/cycle-{cycle}/ and must report artifact paths relative to the execution workspace. "
             "Do not select the next objective, declare mandate success, modify company state, the company store, prior outputs, or prior artifacts. "
             "The fixture is synthetic; do not perform outreach or claim real demand evidence. Output only the required schema object.")
 
 
 def _artifact_excerpts(root):
     result, total = [], 0
-    for path in sorted((root / "artifacts").glob("cycle-*/*")) if (root / "artifacts").exists() else ():
+    artifacts = _execution_workspace(root) / "artifacts"
+    _reject_symlinks(_execution_workspace(root))
+    for path in sorted(artifacts.glob("cycle-*/**/*")) if artifacts.exists() else ():
         if not path.is_file() or path.is_symlink():
             continue
         try:
@@ -677,8 +715,63 @@ def _artifact_excerpts(root):
         remaining = _TOTAL_CONTEXT_LIMIT - total
         if remaining <= 0: break
         text = text[:remaining]; total += len(text)
-        result.append((path.relative_to(root).as_posix(), text))
+        result.append((path.relative_to(_execution_workspace(root)).as_posix(), text))
     return tuple(result)
+
+
+def _execution_workspace(root: Path) -> Path:
+    return root / "execution-workspace"
+
+
+def _authorized_input_directory(root: Path) -> Path:
+    return _execution_workspace(root) / "authorized-inputs"
+
+
+def _execution_output(root: Path, cycle: int) -> Path:
+    return _execution_workspace(root) / ".codex-output" / f"execution-{cycle}.json"
+
+
+def _cycle_artifact_directory(root: Path, cycle: int) -> Path:
+    return _execution_workspace(root) / "artifacts" / f"cycle-{cycle}"
+
+
+def _ensure_authorized_input(root: Path) -> None:
+    canonical = root / "candidate-brief.md"
+    execution_root = _execution_workspace(root)
+    _validate_execution_workspace_root(execution_root)
+    authorized = _authorized_input_directory(root) / "candidate-brief.md"
+    authorized_directory = authorized.parent
+    if canonical.is_symlink() or not canonical.is_file():
+        raise CodexDurableRunError("canonical candidate-brief.md is missing")
+    if authorized_directory.is_symlink():
+        raise CodexDurableRunError("authorized-inputs must not be a symlink")
+    if authorized_directory.exists() and not authorized_directory.is_dir():
+        raise CodexDurableRunError("authorized-inputs must be a directory")
+    contents = canonical.read_bytes()
+    if authorized.exists():
+        if not authorized.is_file() or authorized.is_symlink() or authorized.read_bytes() != contents:
+            raise CodexDurableRunError(
+                "authorized candidate-brief.md differs from the canonical input"
+            )
+        return
+    authorized.parent.mkdir(parents=True, exist_ok=True)
+    authorized.write_bytes(contents)
+
+
+def _validate_execution_workspace_root(root: Path) -> None:
+    if root.is_symlink():
+        raise CodexDurableRunError("execution-workspace must not be a symlink")
+    if root.exists() and not root.is_dir():
+        raise CodexDurableRunError("execution-workspace must be a directory")
+
+
+def _reject_legacy_layout(root: Path) -> None:
+    legacy_outputs = (root / ".codex-output").glob("execution-*.json")
+    legacy_artifacts = root / "artifacts"
+    if any(legacy_outputs) or legacy_artifacts.exists():
+        raise CodexDurableRunError(
+            "legacy Phase 6 workspace layout is incompatible; automatic migration is not supported"
+        )
 
 
 def _inside(path: Path, directory: Path):

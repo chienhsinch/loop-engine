@@ -4,3 +4,7 @@ __pycache__/
 .venv/
 /phase5-demo-real-*/
 /phase6-demo*/
+
+# Local real Codex smoke-run workspaces
+/phase6-isolation-real-*/
+/phase6-demo-real-*/

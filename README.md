@@ -78,3 +78,25 @@ python examples/resumable_multi_cycle.py --workspace ./phase6-demo-real --max-cy
 `--max-cycles` limits objective executions committed by one Python invocation, not executive decisions. After reaching the limit, the runner asks the executive once more and durably authorizes the next objective, records a terminal decision, or records a human escalation before exiting. The first command should execute Objective 1 and leave Objective 2 active; the second should execute Objective 2 and leave Objective 3 active or the mandate terminal or paused.
 
 The immutable Objective lifecycle limitation from Phase 5 remains: completion uses an in-memory terminal copy while the persisted Objective remains pending. Escalation resolution and all external-world execution remain out of scope; the demonstration is synthetic.
+
+New Phase 6 workspaces physically separate durable Loop Engine state from the bounded writable workspace:
+
+```text
+<workspace>/
+  company-store/
+  codex-run-checkpoint.json
+  candidate-brief.md
+  .codex-output/
+    executive-<cycle>.json
+  execution-workspace/
+    authorized-inputs/
+      candidate-brief.md
+    .codex-output/
+      execution-<cycle>.json
+    artifacts/
+      cycle-<cycle>/
+```
+
+The read-only executive runs with `--cd <workspace>`. Bounded execution runs with `--cd <workspace>/execution-workspace --sandbox workspace-write`; `company-store/`, the checkpoint, the canonical candidate brief, and executive outputs are therefore outside its writable root. Initialization copies the canonical candidate brief byte-for-byte to `authorized-inputs/candidate-brief.md`; a differing existing authorized copy is rejected and never overwritten. Evidence records use persistent paths prefixed with `execution-workspace/`.
+
+The physical workspace boundary is the primary protection. Hash comparisons remain defense in depth for authorized inputs, prior execution outputs and artifacts, unexpected files inside the execution workspace, and selected durable-root files. Any symlink under `execution-workspace/` is rejected. Existing Phase 6 workspaces with a checkpoint and legacy root-level execution outputs or artifacts are rejected with an incompatibility error; this version performs no automatic migration.
