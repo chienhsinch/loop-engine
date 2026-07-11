@@ -1,5 +1,6 @@
 import json
 import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import pytest
 from loop_engine.codex_vertical_slice import (
     CodexVerticalSliceError,
     StructuredOutputError,
+    _run_subprocess,
     parse_execution_result,
     parse_executive_proposal,
     run_vertical_slice,
@@ -105,6 +107,23 @@ def executive_proposal_2() -> dict[str, object]:
 def write_json(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_run_subprocess_decodes_utf8_stdout_and_stderr() -> None:
+    script = (
+        "import sys; "
+        "sys.stdout.buffer.write("
+        "'Gr\\u00fc\\u00dfe \\u6771\\u4eac \\U0001f680\\n'.encode('utf-8')); "
+        "sys.stderr.buffer.write("
+        "'\\u8a3a\\u65ad caf\\u00e9 \\U0001f680\\n'.encode('utf-8') "
+        "+ b'\\xff')"
+    )
+
+    completed = _run_subprocess([sys.executable, "-c", script], "")
+
+    assert completed.returncode == 0
+    assert completed.stdout == "Grüße 東京 🚀\n"
+    assert completed.stderr == "診断 café 🚀\n�"
 
 
 def run_with_execution_mutation(
