@@ -20,15 +20,15 @@ Implemented validation and deterministic in-process transitions for authorizing 
 
 Implemented local JSON persistence for mandates, the current company-state snapshot, objectives, executive decisions, evidence, and human escalations, including reference validation and resumable state.
 
-## Next phases
-
 ### Phase 4 - Thin executive architecture
 
-Adopt the v0.3 boundary: Loop Engine owns the durable mandate, decision-relevant workspace, decision history, evidence references, authority boundaries, human escalation, and the outer loop. Delegate bounded execution to capable existing agents and tools. Keep the `TaskGraph` runtime optional and defer broader frameworks until a real use case provides evidence for them.
+Completed the v0.3 boundary: Loop Engine owns the durable mandate, decision-relevant workspace, decision history, evidence references, authority boundaries, human escalation, and the outer loop. Bounded execution is delegated to capable existing agents and tools. `TaskGraph` remains optional, and broader frameworks remain deferred until a real use case provides evidence for them.
+
+## Current phase
 
 ### Phase 5 - End-to-end executive vertical slice
 
-Build the shortest real path through two evidence-linked executive cycles. The vertical slice must demonstrate, in order:
+Implemented the shortest concrete path through two evidence-linked executive cycles using non-interactive Codex CLI calls and checked-in JSON Schemas. The synthetic vertical slice now demonstrates, in order:
 
 1. one durable owner mandate is loaded;
 2. a real model-backed executive reads the current state;
@@ -38,7 +38,9 @@ Build the shortest real path through two evidence-linked executive cycles. The v
 6. the executive reads the updated state and new evidence; and
 7. a materially different objective 2 is selected because of what was learned.
 
-This phase proves dynamic objective selection and real delegation. It need not introduce a generic worker protocol or route the objective through `TaskGraph`.
+The implementation uses canned subprocess outputs in normal tests and never calls the real Codex service during pytest. A real smoke run remains environment-dependent on an accessible, already authenticated Codex CLI. The slice intentionally does not introduce a generic worker protocol or route the objective through `TaskGraph`.
+
+## Next phases
 
 ### Phase 6 - Durable multi-cycle run
 

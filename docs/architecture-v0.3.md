@@ -117,12 +117,15 @@ The repository already implements:
 
 - company-domain models for mandates, `CompanyState`, `Objective`, `ExecutiveDecision`, `Evidence`, state updates, and human escalation;
 - deterministic validation for executive decisions and terminal objective results;
-- durable local JSON persistence for company records; and
-- the separate bounded execution-domain models and minimal `TaskGraph` runtime.
+- durable local JSON persistence for company records;
+- the separate bounded execution-domain models and minimal `TaskGraph` runtime; and
+- one concrete synthetic vertical slice using Codex CLI as both the constrained executive model and the bounded execution capability.
 
-It does not yet implement a real model-backed executive, real execution delegation, an end-to-end multi-cycle runner, or a real-world dogfood run.
+The vertical slice runs two executive cycles around one bounded execution, persists the first cycle's evidence, provides referenced artifact contents to the second executive call, and stops after a materially different Objective 2 is selected. It is a demonstration integration, not a general model provider, worker framework, resumable runner, or claim of autonomous operation.
 
-The next architectural proof is one vertical slice with one durable mandate, a real model-backed executive, and one concrete execution capability. The executive must select objective 1 from current state, persist the resulting evidence, read the updated workspace, and then select a materially different objective 2 because of that new evidence. This proof should precede additional worker types, richer budgets, `TaskGraph` integration, sophisticated escalation resolution, or parallel execution.
+The existing immutable Objective persistence has a known lifecycle limitation in this slice. Objective 1 remains persisted in its original pending form; a terminal-status copy is constructed only in memory for the existing objective-result transition. Version 0.3 preserves that limitation rather than adding a new domain record or redesigning `Objective`.
+
+The next architectural proof after a real local smoke run is a resumable multi-cycle runner followed by one real product-validation mandate. Additional worker types, richer budgets, `TaskGraph` integration, sophisticated escalation resolution, and parallel execution still require evidence from these concrete runs.
 
 ## Intentionally deferred abstractions
 
