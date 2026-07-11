@@ -38,7 +38,7 @@ Implemented the shortest concrete path through two evidence-linked executive cyc
 6. the executive reads the updated state and new evidence; and
 7. a materially different objective 2 is selected because of what was learned.
 
-The implementation uses canned subprocess outputs in normal tests and never calls the real Codex service during pytest. A real smoke run remains environment-dependent on an accessible, already authenticated Codex CLI. The slice intentionally does not introduce a generic worker protocol or route the objective through `TaskGraph`.
+The implementation uses canned subprocess outputs in normal orchestration tests and never calls the real Codex service during pytest. A real Phase 5 smoke run completed successfully on Windows; subprocess output is decoded explicitly as UTF-8 so the run does not depend on `PYTHONUTF8`. The slice intentionally does not introduce a generic worker protocol or route the objective through `TaskGraph`.
 
 ## Next phases
 
