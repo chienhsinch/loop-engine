@@ -29,13 +29,13 @@ Already implemented:
 - company domain models;
 - deterministic executive transitions;
 - durable local JSON persistence;
-- bounded execution-domain foundations; and
-- one concrete synthetic Phase 5 vertical slice using non-interactive Codex CLI calls.
+- bounded execution-domain foundations;
+- one concrete synthetic Phase 5 vertical slice using non-interactive Codex CLI calls; and
+- a durable, resumable Phase 6 multi-cycle Codex runner.
 
 Not implemented:
 
 - a general-purpose model-backed executive or execution-routing layer;
-- a resumable multi-cycle runner; or
 - a real-world dogfood run.
 
 The Phase 5 slice is a controlled demonstration, not general autonomous operation. It uses the existing records, transitions, and local store directly; it does not introduce a worker framework or use `TaskGraph`.
@@ -63,3 +63,18 @@ The workspace contains `company-store/` for durable Loop Engine records and a se
 Known limitation: Objective 1 is persisted as its original immutable pending record. The vertical slice constructs a terminal-status copy in memory for `apply_objective_result()` and does not persist that lifecycle change. This preserves the existing `Objective` design and intentionally does not add a separate objective-result record.
 
 See [architecture v0.3](docs/architecture-v0.3.md) for the current direction, [architecture v0.2](docs/architecture-v0.2.md) and [architecture v0.1](docs/architecture-v0.1.md) for project history, and [the roadmap](docs/roadmap.md) for the planned implementation sequence.
+
+## Phase 6 resumable multi-cycle runner
+
+Phase 6 adds a separate synthetic mandate and a foreground, manually invoked runner. It persists a small atomic `codex-run-checkpoint.json`, uses cycle-specific structured outputs and artifact directories, and resumes completed Codex calls without repeating them. The synthetic mandate intentionally separates candidate selection from validation-plan design into at least two objective executions so the same-workspace resume path is observable. It is not a background service and does not claim autonomous business operation or real demand evidence.
+
+Run the same workspace twice:
+
+```text
+python examples/resumable_multi_cycle.py --workspace ./phase6-demo-real --max-cycles 1
+python examples/resumable_multi_cycle.py --workspace ./phase6-demo-real --max-cycles 1
+```
+
+`--max-cycles` limits objective executions committed by one Python invocation, not executive decisions. After reaching the limit, the runner asks the executive once more and durably authorizes the next objective, records a terminal decision, or records a human escalation before exiting. The first command should execute Objective 1 and leave Objective 2 active; the second should execute Objective 2 and leave Objective 3 active or the mandate terminal or paused.
+
+The immutable Objective lifecycle limitation from Phase 5 remains: completion uses an in-memory terminal copy while the persisted Objective remains pending. Escalation resolution and all external-world execution remain out of scope; the demonstration is synthetic.
