@@ -1,37 +1,59 @@
 # Loop Engine Roadmap
 
-This roadmap moves Loop Engine from its existing bounded task runtime toward the executive architecture in `architecture-v0.2.md`. Each phase should deliver the smallest inspectable increment, preserve explicit state transitions, and use implementation evidence to refine later phases. Architecture changes must remain explicit.
+This roadmap takes Loop Engine from its completed foundations to a real multi-cycle demonstration of the thin executive harness described in `architecture-v0.3.md`. Each phase should deliver the smallest inspectable increment and use concrete execution evidence to justify later abstractions.
 
-## Phase 0 — Preserve the existing execution core
+## Completed foundations
 
-Retain and test the current `Task`, `TaskGraph`, `Attempt`, `ReviewResult`, `TestResult`, and `TransitionDecision` models as the lower-level subsystem for bounded objectives. Clarify its boundary without redesigning it or treating the v0.1 architecture as discarded.
+### Phase 0 - Execution core
 
-## Phase 1 — Company-level domain models
+Implemented the bounded execution-domain foundations: `Task`, `TaskGraph`, `Attempt`, `ReviewResult`, `TestResult`, and `TransitionDecision`. This remains an optional lower-level subsystem rather than the required execution path for every objective.
 
-Define minimal representations for owner mandates, company state, bounded objectives, executive decisions, evidence, and human escalations. Keep these records separate from task-level models and avoid adding agent integrations or speculative organization structures.
+### Phase 1 - Company-level models
 
-## Phase 2 — Deterministic executive loop with stubs
+Implemented owner mandates, durable company state, bounded objectives, executive decisions, evidence, state updates, and human escalations as records separate from the execution domain.
 
-Implement an in-process loop that loads a mandate and company state, accepts a stubbed structured executive decision, authorizes at most one bounded objective, records evidence, applies a state update, and reaches continue, success, stop, and human-escalation paths. Validate decisions and state transitions before adding model-driven judgment.
+### Phase 2 - Deterministic transitions
 
-## Phase 3 — Persistent company state
+Implemented validation and deterministic in-process transitions for authorizing one objective, applying its evidence and state update, continuing across objective cycles, declaring success, stopping, and requesting human input.
 
-Persist mandates, the current company state snapshot, objectives, evidence, executive decisions, and human escalations in a local inspectable format. Support resumption after interruption while preserving record provenance and keeping historical records separate from the replaceable current snapshot.
+### Phase 3 - Durable local persistence
 
-## Phase 4 — Codex-backed executive decision adapter
+Implemented local JSON persistence for mandates, the current company-state snapshot, objectives, executive decisions, evidence, and human escalations, including reference validation and resumable state.
 
-Add a narrow adapter that asks Codex to propose a structured executive decision from the mandate and current company state. Validate the proposal against allowed decision types, authority, budgets, and state invariants before committing it. Keep Codex-specific behavior behind the adapter boundary.
+## Next phases
 
-## Phase 5 — Delegated worker execution
+### Phase 4 - Thin executive architecture
 
-Connect an authorized bounded objective to a dynamically selected worker. Route objectives that need structured planning, attempts, review, tests, or retry through the existing execution subsystem, then normalize their outcomes into objective-level evidence. Workers must not select the next company objective or change the mandate.
+Adopt the v0.3 boundary: Loop Engine owns the durable mandate, decision-relevant workspace, decision history, evidence references, authority boundaries, human escalation, and the outer loop. Delegate bounded execution to capable existing agents and tools. Keep the `TaskGraph` runtime optional and defer broader frameworks until a real use case provides evidence for them.
 
-## Phase 6 — Budget controls and human escalation
+### Phase 5 - End-to-end executive vertical slice
 
-Enforce explicit limits on objective attempts, time, cost, and other configured resources. Pause with a focused escalation when authority, risk, ambiguity, or exhausted budgets prevent safe progress, and record the owner's response before resuming.
+Build the shortest real path through two evidence-linked executive cycles. The vertical slice must demonstrate, in order:
 
-## Phase 7 — Dogfood one product-validation mandate
+1. one durable owner mandate is loaded;
+2. a real model-backed executive reads the current state;
+3. objective 1 is selected from that state;
+4. one concrete execution capability performs the bounded objective;
+5. the resulting evidence is persisted in the durable workspace;
+6. the executive reads the updated state and new evidence; and
+7. a materially different objective 2 is selected because of what was learned.
 
-Use Loop Engine to pursue one real-world product-validation goal across multiple dynamically chosen objectives. Record the complete mandate, decisions, delegated work, evidence, state changes, resource use, and owner interventions. Use that history to identify missing safeguards and select the next development priorities.
+This phase proves dynamic objective selection and real delegation. It need not introduce a generic worker protocol or route the objective through `TaskGraph`.
 
-Parallel portfolios, permanent department agents, additional executive adapters, and distributed deployment should follow demonstrated needs rather than precede a reliable single-executive loop.
+### Phase 6 - Durable multi-cycle run
+
+Turn the vertical slice into a resumable runner that can cross process interruptions and repeat the executive -> objective -> execution -> evidence -> state-update cycle. Preserve authority checks, deterministic transition validation, and focused human escalation while keeping integrations concrete and minimal.
+
+### Phase 7 - Real product-validation mandate
+
+Use Loop Engine on one real product-validation mandate. Record the mandate, model-backed decisions, delegated work, evidence and artifact references, state changes, and owner interventions across multiple dynamically selected objectives. Use the run history to determine whether the harness improves continuity and decision quality and to identify the next missing safeguard.
+
+Only evidence from the Phase 5 vertical slice and subsequent real runs should justify considering:
+
+- more worker types;
+- richer budget controls;
+- integration of the optional `TaskGraph` subsystem;
+- sophisticated escalation resolution; or
+- parallelism.
+
+Generic workflow DAGs, worker frameworks, agent-to-agent conversation protocols, plugin systems, and simulated organization structures are not roadmap goals without concrete evidence that the thin harness needs them.

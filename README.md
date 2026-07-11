@@ -1,28 +1,43 @@
 # Loop Engine
 
-Loop Engine is a lightweight runtime for long-horizon, evidence-driven goal pursuit. An owner provides a high-level mandate; an AI executive repeatedly observes persistent company state, chooses the next bounded objective, delegates execution, evaluates the resulting evidence, and decides whether to continue, declare success, stop, or escalate to the owner.
+Loop Engine is a thin executive harness for long-horizon, evidence-driven goal pursuit. It gives powerful existing agents a durable owner mandate, persistent decision-relevant state, evidence and artifact references, authority and escalation boundaries, and an outer feedback loop.
 
-The intended workflow is:
+The executive model reads the current durable workspace and dynamically chooses the next bounded objective. Loop Engine then delegates that objective to an existing execution capability, such as Codex, research or browser tools, an external coding-agent orchestrator, or a future specialized tool. The resulting evidence and artifact references return to the workspace before the executive chooses what happens next.
 
 ```text
 Owner Mandate
-  -> Company State
-  -> Executive Decision
-  -> Bounded Objective
-  -> Delegated Execution
-  -> Evidence
-  -> State Update
-  -> Continue / Success / Stop / Human Escalation
+  -> Durable Workspace
+  -> Executive Agent
+  -> Next Bounded Objective
+  -> External Execution Capability
+  -> Evidence and Artifacts
+  -> Durable Workspace Update
+  -> Executive Agent
+  -> repeat
 ```
 
-Objectives are selected dynamically as state and evidence change, rather than decomposing the entire mandate into one static task graph at the beginning. Coding agents such as Codex and Claude Code are workers that can execute bounded objectives; they are not the top-level intelligence responsible for pursuing the mandate.
+Loop Engine owns mandate continuity, decision-relevant state, decision history, evidence references, authority boundaries, human escalation, and outer-loop orchestration. It does not reimplement the internal planning, coding-task decomposition, retry loops, or test loops of capable agents, and it is not a generic workflow engine or a simulated multi-agent company.
 
-The existing task runtime remains part of the design as a lower-level execution subsystem. It can plan a bounded objective into tasks, schedule attempts, apply review and test gates, retry work, and escalate execution blockers. Above it, the executive loop owns objective selection, interpretation of company-level evidence, and the decision to continue or end pursuit of the mandate.
+The existing `TaskGraph` runtime remains available as an optional lower-level execution subsystem. A bounded objective may use it when explicit tasks, attempts, review and test gates, and retries provide concrete value. It is not a mandatory path for every objective.
 
 ## Status
 
-Loop Engine is pre-alpha and under active development. The current implementation contains the initial company-level domain models, deterministic in-process executive transitions, local JSON persistence for company records, and the lower-level execution-domain models for goals, tasks, task graphs, attempts, review and test results, and transition decisions. Model-backed executive decisions, delegated execution, and agent integrations have not yet been implemented.
+Loop Engine is pre-alpha and under active development.
 
-Installation and usage instructions will be added when an executable implementation exists. Until then, no installation process is implied or supported.
+Already implemented:
 
-See [architecture v0.2](docs/architecture-v0.2.md) for the current direction, [architecture v0.1](docs/architecture-v0.1.md) for the historical execution-focused design, and [the roadmap](docs/roadmap.md) for the planned implementation sequence.
+- company domain models;
+- deterministic executive transitions;
+- durable local JSON persistence; and
+- bounded execution-domain foundations.
+
+Not implemented:
+
+- a real model-backed executive;
+- real execution delegation;
+- an end-to-end multi-cycle runner; or
+- a real-world dogfood run.
+
+Installation and usage instructions will be added when an executable end-to-end implementation exists. Until then, no installation process is implied or supported.
+
+See [architecture v0.3](docs/architecture-v0.3.md) for the current direction, [architecture v0.2](docs/architecture-v0.2.md) and [architecture v0.1](docs/architecture-v0.1.md) for project history, and [the roadmap](docs/roadmap.md) for the planned implementation sequence.
