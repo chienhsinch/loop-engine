@@ -1,0 +1,13 @@
+{
+  "id": "example-report-validation",
+  "description": "Determine whether the available evidence supports publishing a useful validation report.",
+  "constraints": [
+    "Use only locally authorized inputs and generated artifacts."
+  ],
+  "success_criteria": [
+    "A report distinguishes supported findings from unresolved assumptions."
+  ],
+  "stop_conditions": [
+    "Request human input before any external outreach."
+  ]
+}

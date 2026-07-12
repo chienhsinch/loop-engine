@@ -33,6 +33,7 @@ from loop_engine.company_store import FileCompanyStore
 from loop_engine.executive_loop import apply_executive_decision, apply_objective_result
 
 CommandFunction = Callable[[list[str], str], subprocess.CompletedProcess[str]]
+PromptFunction = Callable[..., str]
 
 MANDATE_ID = "synthetic-resumable-product-validation"
 CHECKPOINT_NAME = "codex-run-checkpoint.json"
@@ -79,6 +80,16 @@ class DurableRunSummary:
     is_terminal: bool
 
 
+@dataclass(frozen=True)
+class RunnerDefinition:
+    """Concrete policy hooks for the shared durable recovery state machine."""
+
+    initial_state: Callable[[Mandate], CompanyState]
+    executive_prompt: PromptFunction
+    execution_prompt: PromptFunction
+    validate_proposal: Callable[[dict[str, object], int], None]
+
+
 def run_durable_cycles(
     workspace: Path | str,
     *,
@@ -102,15 +113,56 @@ def run_durable_cycles(
             raise CodexDurableRunError(f"{label} does not exist: {path}")
 
     store, mandate, checkpoint = _initialize_or_resume(root, fixture)
+    definition = RunnerDefinition(
+        _phase6_initial_state, _executive_prompt, _execution_prompt,
+        _validate_phase6_proposal,
+    )
+    return _run_cycles(
+        root, store, mandate, checkpoint, definition, max_cycles,
+        codex_executable, command_function, schemas,
+    )
+
+
+def run_project_cycles(
+    workspace: Path | str,
+    *,
+    store: FileCompanyStore,
+    mandate: Mandate,
+    checkpoint: RunCheckpoint,
+    definition: RunnerDefinition,
+    max_cycles: int,
+    codex_executable: str | None = None,
+    command_function: CommandFunction | None = None,
+    schema_directory: Path | None = None,
+) -> DurableRunSummary:
+    """Run an already validated concrete project with the shared recovery core."""
+    if isinstance(max_cycles, bool) or not isinstance(max_cycles, int) or max_cycles <= 0:
+        raise ValueError("max_cycles must be a positive integer")
+    root = Path(workspace).resolve()
+    schemas = schema_directory or Path(__file__).resolve().parents[2] / "schemas"
+    for path, label in (
+        (schemas / "executive_proposal.schema.json", "executive JSON Schema"),
+        (schemas / "execution_result.schema.json", "execution JSON Schema"),
+    ):
+        if not path.is_file():
+            raise CodexDurableRunError(f"{label} does not exist: {path}")
+    return _run_cycles(
+        root, store, mandate, checkpoint, definition, max_cycles,
+        codex_executable, command_function, schemas,
+    )
+
+
+def _run_cycles(root, store, mandate, checkpoint, definition, max_cycles,
+                codex_executable, command_function, schemas):
     starting = checkpoint
-    _validate_checkpoint(checkpoint, store, root, mandate)
+    _validate_checkpoint(checkpoint, store, root, mandate, definition)
     executed: list[str] = []
     created_evidence: list[str] = []
     committed = 0
 
     while True:
-        checkpoint = _load_checkpoint(root / CHECKPOINT_NAME)
-        _validate_checkpoint(checkpoint, store, root, mandate)
+        checkpoint = _load_checkpoint(root / CHECKPOINT_NAME, mandate.id, definition)
+        _validate_checkpoint(checkpoint, store, root, mandate, definition)
         if checkpoint.stage in ("terminal", "needs_human"):
             break
         if committed >= max_cycles and checkpoint.stage == "objective_active":
@@ -119,24 +171,26 @@ def run_durable_cycles(
             checkpoint = _capture_executive(
                 root, store, mandate, checkpoint, codex_executable,
                 schemas / "executive_proposal.schema.json", command_function,
+                definition,
             )
         elif checkpoint.stage == "proposal_captured":
-            checkpoint = _commit_proposal(root, store, mandate, checkpoint)
+            checkpoint = _commit_proposal(root, store, mandate, checkpoint, definition)
         elif checkpoint.stage == "objective_active":
             checkpoint = _capture_execution(
                 root, store, mandate, checkpoint, codex_executable,
                 schemas / "execution_result.schema.json", command_function,
+                definition,
             )
         elif checkpoint.stage == "execution_captured":
             objective_id, evidence_ids, newly_committed = _commit_execution(
-                root, store, mandate, checkpoint
+                root, store, mandate, checkpoint, definition
             )
             if newly_committed:
                 executed.append(objective_id)
                 created_evidence.extend(evidence_ids)
                 committed += 1
 
-    final_checkpoint = _load_checkpoint(root / CHECKPOINT_NAME)
+    final_checkpoint = _load_checkpoint(root / CHECKPOINT_NAME, mandate.id, definition)
     final_state = store.load_state(mandate.id)
     return DurableRunSummary(
         mandate.id, starting.stage, final_checkpoint.stage,
@@ -225,28 +279,37 @@ def _phase6_mandate() -> Mandate:
     )
 
 
-def _capture_executive(root, store, mandate, checkpoint, codex_executable, schema, command_function):
+def _phase6_initial_state(mandate: Mandate) -> CompanyState:
+    return CompanyState(
+        mandate_id=mandate.id, status=MandateStatus.ACTIVE,
+        summary="The synthetic candidates have not yet been compared.",
+        facts=("The candidate brief is synthetic and is not real demand evidence.",),
+        open_questions=("Which candidate hypothesis should be validated?",),
+    )
+
+
+def _capture_executive(root, store, mandate, checkpoint, codex_executable, schema, command_function, definition):
     state = store.load_state(mandate.id)
     evidence = tuple(store.load_evidence(mandate.id, item) for item in state.relevant_evidence_ids)
     output = root / ".codex-output" / f"executive-{checkpoint.cycle_number}.json"
     if not output.exists():
         executable = _resolve_codex(codex_executable, command_function)
-        _invoke(executable, _executive_prompt(mandate, state, evidence, _artifact_excerpts(root), checkpoint.cycle_number),
+        _invoke(executable, definition.executive_prompt(mandate, state, evidence, _artifact_excerpts(root), checkpoint.cycle_number),
                 root, schema, output, "read-only", command_function, "executive")
     proposal = parse_executive_proposal(output)
-    _validate_phase6_proposal(proposal, checkpoint.cycle_number)
+    definition.validate_proposal(proposal, checkpoint.cycle_number)
     result = replace(checkpoint, stage="proposal_captured", captured_executive_proposal=proposal)
     _save_checkpoint(root / CHECKPOINT_NAME, result)
     return result
 
 
-def _commit_proposal(root, store, mandate, checkpoint):
+def _commit_proposal(root, store, mandate, checkpoint, definition):
     proposal = checkpoint.captured_executive_proposal
     assert proposal is not None
     decision, objective, escalation = _proposal_records(proposal, mandate, checkpoint.cycle_number)
     state = store.load_state(mandate.id)
     expected_pre_state = _reconstruct_pre_execution_state(
-        root, store, mandate, checkpoint.cycle_number
+        root, store, mandate, checkpoint.cycle_number, definition
     )
     expected_post_state = apply_executive_decision(
         expected_pre_state, decision, objective, escalation
@@ -269,27 +332,37 @@ def _commit_proposal(root, store, mandate, checkpoint):
     return result
 
 
-def _capture_execution(root, store, mandate, checkpoint, codex_executable, schema, command_function):
+def _capture_execution(root, store, mandate, checkpoint, codex_executable, schema, command_function, definition):
     cycle = checkpoint.cycle_number
     objective = store.load_objective(mandate.id, f"objective-{cycle}")
     execution_root = _execution_workspace(root)
     output = _execution_output(root, cycle)
+    cycle_artifacts = _prepare_cycle_artifact_directory(root, cycle)
     if checkpoint.protected_file_hashes is None:
         if output.exists():
             raise CodexDurableRunError(
                 "execution output exists without a durable pre-execution guard"
             )
+        try:
+            has_existing_artifacts = any(cycle_artifacts.iterdir())
+        except PermissionError as exc:
+            raise _unreadable_path_error(root, cycle_artifacts, exc) from exc
+        if has_existing_artifacts:
+            raise CodexDurableRunError(
+                f"artifacts/cycle-{cycle} contains current-cycle artifacts "
+                "without a durable pre-execution guard"
+            )
         hashes = _snapshot_protected(execution_root, cycle, output)
         checkpoint = replace(checkpoint, protected_file_hashes=hashes)
         _save_checkpoint(root / CHECKPOINT_NAME, checkpoint)
     assert checkpoint.protected_file_hashes is not None
-    _verify_protected(root, cycle, output, checkpoint.protected_file_hashes)
+    _verify_protected(root, cycle, output, checkpoint.protected_file_hashes, mandate.id)
     if not output.exists():
         executable = _resolve_codex(codex_executable, command_function)
         durable_hashes = _snapshot_durable(root)
-        _invoke(executable, _execution_prompt(mandate, objective, store.load_state(mandate.id), cycle),
+        _invoke(executable, definition.execution_prompt(mandate, objective, store.load_state(mandate.id), cycle),
                 execution_root, schema, output, "workspace-write", command_function, "bounded execution")
-        _verify_protected(root, cycle, output, checkpoint.protected_file_hashes)
+        _verify_protected(root, cycle, output, checkpoint.protected_file_hashes, mandate.id)
         _verify_durable(root, durable_hashes)
     execution = _parse_cycle_execution(output, execution_root, cycle)
     result = replace(checkpoint, stage="execution_captured",
@@ -298,27 +371,15 @@ def _capture_execution(root, store, mandate, checkpoint, codex_executable, schem
     return result
 
 
-def _commit_execution(root, store, mandate, checkpoint):
+def _commit_execution(root, store, mandate, checkpoint, definition):
     cycle = checkpoint.cycle_number
     execution = checkpoint.captured_execution_result
     assert execution is not None
-    objective = store.load_objective(mandate.id, f"objective-{cycle}")
-    decision = store.load_decision(mandate.id, f"decision-{cycle}")
     state = store.load_state(mandate.id)
-    pre_execution_state = _reconstruct_pre_execution_state(
-        root, store, mandate, cycle
-    )
-    expected_active_state = replace(
-        pre_execution_state, active_objective_id=objective.id
-    )
-    evidence, update = _execution_records(
-        execution, expected_active_state, objective, decision, cycle
-    )
-    expected_state = apply_objective_result(
-        expected_active_state,
-        replace(objective, status=ObjectiveStatus.SUCCEEDED),
-        evidence,
-        update,
+    objective, evidence, expected_active_state, expected_state = (
+        _expected_execution_states(
+            root, store, mandate, cycle, definition, execution
+        )
     )
     if state not in (expected_active_state, expected_state):
         raise CodexDurableRunError(
@@ -334,19 +395,33 @@ def _commit_execution(root, store, mandate, checkpoint):
     return objective.id, tuple(item.id for item in evidence), newly_committed
 
 
-def _reconstruct_pre_execution_state(root, store, mandate, cycle):
-    """Rebuild the deterministic snapshot preceding one execution cycle."""
-    state = CompanyState(
-        mandate_id=mandate.id,
-        status=MandateStatus.ACTIVE,
-        summary="The synthetic candidates have not yet been compared.",
-        facts=(
-            "The candidate brief is synthetic and is not real demand evidence.",
-        ),
-        open_questions=(
-            "Which candidate hypothesis should be validated?",
-        ),
+def _expected_execution_states(
+    root, store, mandate, cycle, definition, execution
+):
+    """Derive the exact pre-result and post-result states for one cycle."""
+    objective = store.load_objective(mandate.id, f"objective-{cycle}")
+    decision = store.load_decision(mandate.id, f"decision-{cycle}")
+    pre_execution_state = _reconstruct_pre_execution_state(
+        root, store, mandate, cycle, definition
     )
+    expected_active_state = replace(
+        pre_execution_state, active_objective_id=objective.id
+    )
+    evidence, update = _execution_records(
+        execution, expected_active_state, objective, decision, cycle
+    )
+    expected_state = apply_objective_result(
+        expected_active_state,
+        replace(objective, status=ObjectiveStatus.SUCCEEDED),
+        evidence,
+        update,
+    )
+    return objective, evidence, expected_active_state, expected_state
+
+
+def _reconstruct_pre_execution_state(root, store, mandate, cycle, definition):
+    """Rebuild the deterministic snapshot preceding one execution cycle."""
+    state = definition.initial_state(mandate)
     for prior_cycle in range(1, cycle):
         objective = store.load_objective(
             mandate.id, f"objective-{prior_cycle}"
@@ -409,7 +484,8 @@ def _proposal_records(proposal, mandate, cycle):
     return decision, objective, escalation
 
 
-def _load_checkpoint(path: Path) -> RunCheckpoint:
+def _load_checkpoint(path: Path, mandate_id: str = MANDATE_ID,
+                     definition: RunnerDefinition | None = None) -> RunCheckpoint:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -418,7 +494,7 @@ def _load_checkpoint(path: Path) -> RunCheckpoint:
         raise CodexDurableRunError("runner checkpoint must contain exact keys")
     if payload["schema_version"] != 1:
         raise CodexDurableRunError("unsupported runner checkpoint schema_version")
-    if payload["mandate_id"] != MANDATE_ID:
+    if payload["mandate_id"] != mandate_id:
         raise CodexDurableRunError("runner checkpoint mandate mismatch")
     if isinstance(payload["cycle_number"], bool) or not isinstance(payload["cycle_number"], int) or payload["cycle_number"] <= 0:
         raise CodexDurableRunError("runner checkpoint cycle_number must be positive")
@@ -428,11 +504,11 @@ def _load_checkpoint(path: Path) -> RunCheckpoint:
     if hashes is not None and (not isinstance(hashes, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in hashes.items())):
         raise CodexDurableRunError("runner checkpoint protected_file_hashes is invalid")
     checkpoint = RunCheckpoint(**payload)
-    _validate_captured_shapes(checkpoint)
+    _validate_captured_shapes(checkpoint, definition)
     return checkpoint
 
 
-def _validate_captured_shapes(checkpoint):
+def _validate_captured_shapes(checkpoint, definition=None):
     proposal, execution, hashes = (checkpoint.captured_executive_proposal,
                                    checkpoint.captured_execution_result,
                                    checkpoint.protected_file_hashes)
@@ -440,7 +516,7 @@ def _validate_captured_shapes(checkpoint):
         if proposal is None or execution is not None or hashes is not None:
             raise CodexDurableRunError("invalid proposal_captured checkpoint fields")
         _validate_proposal_payload(proposal)
-        _validate_phase6_proposal(proposal, checkpoint.cycle_number)
+        (definition.validate_proposal if definition else _validate_phase6_proposal)(proposal, checkpoint.cycle_number)
     elif checkpoint.stage == "execution_captured":
         if execution is None or proposal is not None or hashes is not None:
             raise CodexDurableRunError("invalid execution_captured checkpoint fields")
@@ -452,7 +528,7 @@ def _validate_captured_shapes(checkpoint):
         raise CodexDurableRunError(f"invalid {checkpoint.stage} checkpoint fields")
 
 
-def _validate_checkpoint(checkpoint, store, root, mandate):
+def _validate_checkpoint(checkpoint, store, root, mandate, definition):
     try:
         state = store.load_state(checkpoint.mandate_id)
     except (FileNotFoundError, ValueError) as exc:
@@ -474,7 +550,7 @@ def _validate_checkpoint(checkpoint, store, root, mandate):
             checkpoint.cycle_number,
         )
         expected_pre_state = _reconstruct_pre_execution_state(
-            root, store, mandate, checkpoint.cycle_number
+            root, store, mandate, checkpoint.cycle_number, definition
         )
         expected_post_state = apply_executive_decision(
             expected_pre_state, decision, objective, escalation
@@ -484,9 +560,19 @@ def _validate_checkpoint(checkpoint, store, root, mandate):
                 "captured proposal contradicts company state"
             )
     if checkpoint.stage == "execution_captured":
-        if not (state.active_objective_id == f"objective-{checkpoint.cycle_number}" or
-                (state.status is MandateStatus.ACTIVE and state.active_objective_id is None)):
-            raise CodexDurableRunError("execution_captured checkpoint contradicts company state")
+        execution = checkpoint.captured_execution_result
+        assert execution is not None
+        _, _, expected_active_state, expected_post_state = (
+            _expected_execution_states(
+                root, store, mandate, checkpoint.cycle_number,
+                definition, execution,
+            )
+        )
+        if state not in (expected_active_state, expected_post_state):
+            raise CodexDurableRunError(
+                "execution_captured checkpoint contradicts expected pre-result and "
+                "post-result company state"
+            )
 
 
 def _save_checkpoint(path: Path, checkpoint: RunCheckpoint) -> None:
@@ -507,15 +593,18 @@ def _snapshot_protected(execution_root: Path, cycle: int, output: Path):
     _reject_symlinks(execution_root)
     allowed = _cycle_artifact_directory(execution_root.parent, cycle)
     result = {}
-    for path in _files(execution_root):
+    for path in _files(execution_root, execution_root.parent):
         if path == output or _inside(path, allowed):
             continue
-        result[path.relative_to(execution_root).as_posix()] = _hash(path)
+        result[path.relative_to(execution_root).as_posix()] = _hash(
+            path, execution_root.parent
+        )
     return result
 
 
-def _verify_protected(root: Path, cycle: int, output: Path, expected):
-    checkpoint = _load_checkpoint(root / CHECKPOINT_NAME)
+def _verify_protected(root: Path, cycle: int, output: Path, expected,
+                      mandate_id: str = MANDATE_ID):
+    checkpoint = _load_checkpoint(root / CHECKPOINT_NAME, mandate_id)
     if (checkpoint.stage != "objective_active"
             or checkpoint.cycle_number != cycle
             or checkpoint.protected_file_hashes != expected):
@@ -532,10 +621,10 @@ def _snapshot_durable(root: Path) -> dict[str, str]:
     """Snapshot durable files after the runner has written its execution guard."""
     result = {}
     execution_root = _execution_workspace(root)
-    for path in _files(root):
+    for path in _files(root, root):
         if _inside(path, execution_root):
             continue
-        result[path.relative_to(root).as_posix()] = _hash(path)
+        result[path.relative_to(root).as_posix()] = _hash(path, root)
     return result
 
 
@@ -553,26 +642,44 @@ def _verify_durable(root: Path, expected: dict[str, str]) -> None:
 
 def _reject_symlinks(root: Path) -> None:
     _validate_execution_workspace_root(root)
-    links = sorted(
-        path.relative_to(root).as_posix()
-        for path in root.rglob("*")
-        if path.is_symlink()
-    )
+    project_root = root.parent if root.name == "execution-workspace" else root
+    try:
+        links = sorted(
+            path.relative_to(root).as_posix()
+            for path in root.rglob("*")
+            if path.is_symlink()
+        )
+    except PermissionError as exc:
+        raise _unreadable_path_error(project_root, root, exc) from exc
     if links:
         raise CodexDurableRunError(
             "execution-workspace contains symlink(s): " + ", ".join(links)
         )
 
 
-def _files(root):
-    return tuple(path for path in root.rglob("*") if path.is_file() and not path.is_symlink())
+def _files(root, project_root=None):
+    project_root = project_root or root
+    result = []
+    try:
+        for path in root.rglob("*"):
+            if path.is_file() and not path.is_symlink():
+                result.append(path)
+    except PermissionError as exc:
+        failing = path if "path" in locals() else root
+        raise _unreadable_path_error(project_root, failing, exc) from exc
+    return tuple(result)
 
 
-def _hash(path):
+def _hash(path, project_root=None):
     digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(65536), b""):
-            digest.update(chunk)
+    try:
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(65536), b""):
+                digest.update(chunk)
+    except PermissionError as exc:
+        raise _unreadable_path_error(
+            project_root or path.parent, path, exc
+        ) from exc
     return digest.hexdigest()
 
 
@@ -580,18 +687,35 @@ def _parse_cycle_execution(path: Path, root: Path, cycle: int):
     _reject_symlinks(root)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
+    except PermissionError as exc:
+        raise _unreadable_path_error(root.parent, path, exc) from exc
     except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise StructuredOutputError("execution result contains malformed JSON") from exc
     _validate_execution_payload(payload)
-    base = (root / "artifacts" / f"cycle-{cycle}").resolve()
+    try:
+        base = (root / "artifacts" / f"cycle-{cycle}").resolve()
+    except PermissionError as exc:
+        raise _unreadable_path_error(
+            root.parent, root / "artifacts" / f"cycle-{cycle}", exc
+        ) from exc
     checked = []
     for raw in payload["artifact_paths"]:
         posix = PurePosixPath(raw)
         if posix.is_absolute() or ".." in posix.parts or posix.parts[:2] != ("artifacts", f"cycle-{cycle}"):
             raise StructuredOutputError(f"artifact path must be under artifacts/cycle-{cycle}/")
         target = root.joinpath(*posix.parts)
-        if target.is_symlink() or not target.is_file() or not _inside(target.resolve(), base):
-            raise StructuredOutputError(f"artifact path is not a regular cycle file: {raw}")
+        try:
+            valid = (
+                not target.is_symlink()
+                and target.is_file()
+                and _inside(target.resolve(), base)
+            )
+        except PermissionError as exc:
+            raise _unreadable_path_error(root.parent, target, exc) from exc
+        if not valid:
+            raise StructuredOutputError(
+                f"artifact path is not a regular cycle file: {raw}"
+            )
         checked.append(posix.as_posix())
     return {**payload, "observations": tuple(payload["observations"]), "artifact_paths": tuple(checked),
             "facts": tuple(payload["facts"]), "assumptions": tuple(payload["assumptions"]),
@@ -696,7 +820,9 @@ def _execution_prompt(mandate, objective, state, cycle):
     return (f"Execute only this bounded objective for cycle {cycle}.\nMandate: {_json_value(asdict(mandate))}\n"
             f"Objective: {_json_value(asdict(objective))}\nState: {_json_value(asdict(state))}\n"
             "The only authorized input is authorized-inputs/candidate-brief.md, relative to this execution workspace. "
-            f"You may write only under artifacts/cycle-{cycle}/ and must report artifact paths relative to the execution workspace. "
+            f"The artifacts/cycle-{cycle}/ directory already exists. Write artifact files inside it and preserve its inherited permissions. "
+            "Do not replace, rename, delete, or recreate that directory, and do not modify prior cycle directories. "
+            "Report artifact paths relative to the execution workspace. "
             "Do not select the next objective, declare mandate success, modify company state, the company store, prior outputs, or prior artifacts. "
             "The fixture is synthetic; do not perform outreach or claim real demand evidence. Output only the required schema object.")
 
@@ -705,17 +831,23 @@ def _artifact_excerpts(root):
     result, total = [], 0
     artifacts = _execution_workspace(root) / "artifacts"
     _reject_symlinks(_execution_workspace(root))
-    for path in sorted(artifacts.glob("cycle-*/**/*")) if artifacts.exists() else ():
-        if not path.is_file() or path.is_symlink():
-            continue
-        try:
-            text = path.read_text(encoding="utf-8")[:_EXCERPT_LIMIT]
-        except UnicodeDecodeError:
-            continue
-        remaining = _TOTAL_CONTEXT_LIMIT - total
-        if remaining <= 0: break
-        text = text[:remaining]; total += len(text)
-        result.append((path.relative_to(_execution_workspace(root)).as_posix(), text))
+    try:
+        paths = sorted(artifacts.glob("cycle-*/**/*")) if artifacts.exists() else ()
+        for path in paths:
+            if not path.is_file() or path.is_symlink():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")[:_EXCERPT_LIMIT]
+            except UnicodeDecodeError:
+                continue
+            remaining = _TOTAL_CONTEXT_LIMIT - total
+            if remaining <= 0:
+                break
+            text = text[:remaining]; total += len(text)
+            result.append((path.relative_to(_execution_workspace(root)).as_posix(), text))
+    except PermissionError as exc:
+        failing = path if "path" in locals() else artifacts
+        raise _unreadable_path_error(root, failing, exc) from exc
     return tuple(result)
 
 
@@ -733,6 +865,47 @@ def _execution_output(root: Path, cycle: int) -> Path:
 
 def _cycle_artifact_directory(root: Path, cycle: int) -> Path:
     return _execution_workspace(root) / "artifacts" / f"cycle-{cycle}"
+
+
+def _prepare_cycle_artifact_directory(root: Path, cycle: int) -> Path:
+    execution_root = _execution_workspace(root)
+    artifacts = execution_root / "artifacts"
+    cycle_directory = _cycle_artifact_directory(root, cycle)
+    try:
+        for directory, label in (
+            (execution_root, "execution-workspace"),
+            (artifacts, "artifacts"),
+        ):
+            if directory.is_symlink():
+                raise CodexDurableRunError(f"{label} must not be a symlink")
+            if directory.exists() and not directory.is_dir():
+                raise CodexDurableRunError(f"{label} must be a directory")
+            directory.mkdir(exist_ok=True)
+        if cycle_directory.is_symlink():
+            raise CodexDurableRunError(
+                f"artifacts/cycle-{cycle} must not be a symlink"
+            )
+        if cycle_directory.exists() and not cycle_directory.is_dir():
+            raise CodexDurableRunError(
+                f"artifacts/cycle-{cycle} must be a directory"
+            )
+        cycle_directory.mkdir(exist_ok=True)
+    except PermissionError as exc:
+        raise _unreadable_path_error(root, cycle_directory, exc) from exc
+    return cycle_directory
+
+
+def _unreadable_path_error(
+    project_root: Path, path: Path, error: PermissionError
+) -> CodexDurableRunError:
+    try:
+        display = path.absolute().relative_to(project_root.absolute()).as_posix()
+    except ValueError:
+        display = str(path)
+    return CodexDurableRunError(
+        f"generated path is unreadable: {display}; native Windows Codex "
+        "sandbox ACLs may be the cause"
+    )
 
 
 def _ensure_authorized_input(root: Path) -> None:

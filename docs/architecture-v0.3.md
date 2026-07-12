@@ -35,7 +35,7 @@ The durable workspace is the executive agent's persistent decision context. It c
 
 The workspace is not an unrestricted transcript and need not copy every external artifact into Loop Engine storage. Large outputs may remain in their native repository, document store, or tool environment as long as the evidence record contains a durable, inspectable reference and enough context for the executive to interpret it.
 
-The current implementation provides immutable company-domain records, a replaceable `CompanyState` snapshot, deterministic transition validation, local JSON persistence, and one concrete resumable Codex runner. Dedicated artifact-reference domain fields are not implemented; the runner retains cycle-specific relative paths in evidence provenance.
+The current implementation provides immutable company-domain records, a replaceable `CompanyState` snapshot, deterministic transition validation, local JSON persistence, a synthetic resumable Codex runner, and a personal-project CLI that supplies a strict user mandate to the same recovery state machine. Dedicated artifact-reference domain fields are not implemented; the runners retain cycle-specific relative paths in evidence provenance.
 
 For the concrete resumable Codex runner, bounded execution receives workspace-write access only to a dedicated `execution-workspace/`. The company store, orchestration checkpoint, canonical inputs, and executive outputs remain in the durable root outside that writable boundary. Protected-file hashing and symlink checks remain defense in depth; this separation is not a claim of container-level isolation or a general sandbox architecture.
 

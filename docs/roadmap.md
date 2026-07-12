@@ -1,5 +1,9 @@
 # Loop Engine Roadmap
 
+## Personal project workspace milestone
+
+The first personal-use workspace milestone adds strict JSON mandate intake plus foreground `init`, `run`, `status`, and `history` commands. It reuses the Phase 6 durable checkpoint and reconciliation state machine while supplying personal-project initial state, prompts, and proposal policy. This is a concrete path for local personal projects, but it does not complete real-world dogfooding: owner evidence ingestion, escalation resolution, external outreach, background operation, repository mutation, and generic execution routing remain deferred.
+
 This roadmap takes Loop Engine from its completed foundations to a real multi-cycle demonstration of the thin executive harness described in `architecture-v0.3.md`. Each phase should deliver the smallest inspectable increment and use concrete execution evidence to justify later abstractions.
 
 ## Completed foundations

@@ -58,6 +58,92 @@ class FakeCodex:
         return subprocess.CompletedProcess(command, 0, "", "")
 
 
+def test_phase6_host_creates_cycle_directory_before_execution(tmp_path):
+    class AssertExisting(FakeCodex):
+        def __call__(self, command, prompt):
+            output = Path(command[command.index("--output-last-message") + 1])
+            if output.name == "execution-1.json":
+                cycle = tmp_path / "execution-workspace/artifacts/cycle-1"
+                assert cycle.is_dir()
+                assert list(cycle.iterdir()) == []
+                assert "already exists" in prompt
+                assert "preserve its inherited permissions" in prompt
+            return super().__call__(command, prompt)
+
+    result = run_durable_cycles(
+        tmp_path, max_cycles=1,
+        command_function=AssertExisting([proposal(), proposal("Next")]),
+    )
+    assert result.executed_objective_ids == ("objective-1",)
+    assert (tmp_path / "execution-workspace/artifacts/cycle-1/result.md").is_file()
+
+
+def test_existing_empty_current_cycle_directory_is_accepted(tmp_path):
+    cycle = tmp_path / "execution-workspace/artifacts/cycle-1"
+    cycle.mkdir(parents=True)
+    result = run_durable_cycles(
+        tmp_path, max_cycles=1,
+        command_function=FakeCodex([proposal(), proposal("Next")]),
+    )
+    assert result.executed_objective_ids == ("objective-1",)
+
+
+def test_regular_file_at_cycle_directory_path_is_rejected(tmp_path):
+    cycle = tmp_path / "execution-workspace/artifacts/cycle-1"
+    cycle.parent.mkdir(parents=True)
+    cycle.write_text("not a directory", encoding="utf-8")
+    with pytest.raises(CodexDurableRunError, match="cycle-1 must be a directory"):
+        run_durable_cycles(
+            tmp_path, max_cycles=1,
+            command_function=FakeCodex([proposal()]),
+        )
+
+
+def test_symlink_at_cycle_directory_path_is_rejected(tmp_path):
+    artifacts = tmp_path / "execution-workspace/artifacts"
+    target = tmp_path / "cycle-target"
+    artifacts.mkdir(parents=True)
+    target.mkdir()
+    try:
+        (artifacts / "cycle-1").symlink_to(target, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+    with pytest.raises(CodexDurableRunError, match="cycle-1 must not be a symlink"):
+        run_durable_cycles(
+            tmp_path, max_cycles=1,
+            command_function=FakeCodex([proposal()]),
+        )
+
+
+def test_unreadable_generated_artifact_preserves_checkpoint_and_evidence(
+    tmp_path, monkeypatch
+):
+    original_is_file = Path.is_file
+
+    def deny_result(path):
+        if path.name == "result.md":
+            raise PermissionError(5, "Access is denied", str(path))
+        return original_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", deny_result)
+    with pytest.raises(CodexDurableRunError) as captured:
+        run_durable_cycles(
+            tmp_path, max_cycles=1,
+            command_function=FakeCodex([proposal()]),
+        )
+    message = str(captured.value)
+    assert "execution-workspace/artifacts/cycle-1/result.md" in message
+    assert "unreadable" in message
+    assert "native Windows Codex sandbox ACLs may be the cause" in message
+    assert "WinError" not in message
+    checkpoint = json.loads((tmp_path / CHECKPOINT_NAME).read_text())
+    assert checkpoint["stage"] == "objective_active"
+    assert checkpoint["protected_file_hashes"] is not None
+    store = FileCompanyStore(tmp_path / "company-store")
+    with pytest.raises(FileNotFoundError):
+        store.load_evidence(durable.MANDATE_ID, "evidence-1-1")
+
+
 def test_execution_workspace_is_physically_separate_and_inputs_match(tmp_path):
     fake = FakeCodex([proposal("Objective one"), proposal("Objective two")])
     run_durable_cycles(tmp_path, max_cycles=1, command_function=fake)
@@ -242,20 +328,51 @@ def test_existing_execution_output_is_reused(tmp_path):
     initial = FakeCodex([proposal(), proposal("Objective two")])
     # Stop immediately after authorization by directly creating a max-limit state through one terminal-free run setup.
     run_durable_cycles(tmp_path, max_cycles=1, command_function=initial)
-    # The first invocation leaves objective 2 active. Create its output and artifact before resume.
-    artifact = tmp_path / "execution-workspace/artifacts/cycle-2/result.md"
-    artifact.parent.mkdir(parents=True, exist_ok=True); artifact.write_text("cycle 2", encoding="utf-8")
-    # A first resume call is needed to save the durable guard; simulate a crash from the command.
+    # The first invocation leaves objective 2 active. Simulate Codex creating its
+    # artifact and output only after the runner has durably saved the guard.
     def crash(command, prompt):
         output = Path(command[command.index("--output-last-message") + 1])
+        artifact = tmp_path / "execution-workspace/artifacts/cycle-2/result.md"
+        assert artifact.parent.is_dir()
+        artifact.write_text("cycle 2", encoding="utf-8")
         output.write_text(json.dumps(execution(2)), encoding="utf-8")
         raise OSError("crash after Codex")
     with pytest.raises(CodexDurableRunError):
         run_durable_cycles(tmp_path, max_cycles=1, command_function=crash)
+    guarded = json.loads((tmp_path / CHECKPOINT_NAME).read_text())
+    assert guarded["stage"] == "objective_active"
+    assert guarded["protected_file_hashes"] is not None
     quiet = FakeCodex([proposal("Objective three")])
     result = run_durable_cycles(tmp_path, max_cycles=1, command_function=quiet)
     assert result.executed_objective_ids == ("objective-2",)
     assert not any("artifacts/cycle-2/" in call and "Execute only" in call for call in quiet.calls)
+
+
+def test_populated_current_cycle_without_guard_is_rejected_unchanged(tmp_path):
+    run_durable_cycles(
+        tmp_path, max_cycles=1,
+        command_function=FakeCodex([proposal(), proposal("Objective two")]),
+    )
+    artifact = tmp_path / "execution-workspace/artifacts/cycle-2/orphaned.md"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    original = b"untrusted pre-guard content\r\n"
+    artifact.write_bytes(original)
+
+    with pytest.raises(
+        CodexDurableRunError,
+        match="current-cycle artifacts without a durable pre-execution guard",
+    ):
+        run_durable_cycles(
+            tmp_path, max_cycles=1, command_function=FakeCodex([])
+        )
+
+    assert artifact.read_bytes() == original
+    checkpoint = json.loads((tmp_path / CHECKPOINT_NAME).read_text())
+    assert checkpoint["stage"] == "objective_active"
+    assert checkpoint["protected_file_hashes"] is None
+    store = FileCompanyStore(tmp_path / "company-store")
+    with pytest.raises(FileNotFoundError):
+        store.load_evidence(durable.MANDATE_ID, "evidence-2-1")
 
 
 def test_existing_execution_output_without_durable_guard_is_rejected(tmp_path):

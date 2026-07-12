@@ -32,6 +32,7 @@ Already implemented:
 - bounded execution-domain foundations;
 - one concrete synthetic Phase 5 vertical slice using non-interactive Codex CLI calls; and
 - a durable, resumable Phase 6 multi-cycle Codex runner.
+- a foreground personal-project CLI using a user-supplied mandate.
 
 Not implemented:
 
@@ -100,3 +101,41 @@ New Phase 6 workspaces physically separate durable Loop Engine state from the bo
 The read-only executive runs with `--cd <workspace>`. Bounded execution runs with `--cd <workspace>/execution-workspace --sandbox workspace-write`; `company-store/`, the checkpoint, the canonical candidate brief, and executive outputs are therefore outside its writable root. Initialization copies the canonical candidate brief byte-for-byte to `authorized-inputs/candidate-brief.md`; a differing existing authorized copy is rejected and never overwritten. Evidence records use persistent paths prefixed with `execution-workspace/`.
 
 The physical workspace boundary is the primary protection. Hash comparisons remain defense in depth for authorized inputs, prior execution outputs and artifacts, unexpected files inside the execution workspace, and selected durable-root files. Any symlink under `execution-workspace/` is rejected. Existing Phase 6 workspaces with a checkpoint and legacy root-level execution outputs or artifacts are rejected with an incompatibility error; this version performs no automatic migration.
+
+## Personal project workspace
+
+The first personal-use milestone accepts one strict JSON mandate. The object must contain exactly `id`, `description`, `constraints`, `success_criteria`, and `stop_conditions`. The first two values are non-empty strings; the other three are arrays containing only non-empty strings. Unknown or duplicate fields, booleans, nulls, and other value types are rejected. [examples/personal_mandate.json](examples/personal_mandate.json) is a format example, not validated market evidence.
+
+Initialize and operate one project with foreground, manual commands:
+
+```text
+python -m loop_engine init --workspace ./my-project --mandate ./mandate.json
+python -m loop_engine run --workspace ./my-project --max-cycles 1
+python -m loop_engine status --workspace ./my-project
+python -m loop_engine history --workspace ./my-project
+```
+
+The workspace layout is:
+
+```text
+<workspace>/
+  project.json
+  mandate.json
+  company-store/
+  codex-run-checkpoint.json
+  .codex-output/
+    executive-<cycle>.json
+  execution-workspace/
+    authorized-inputs/
+      mandate.json
+    .codex-output/
+      execution-<cycle>.json
+    artifacts/
+      cycle-<cycle>/
+```
+
+The read-only executive runs at the durable project root. Bounded execution receives workspace-write access only to `execution-workspace/`; its sole initial authorized file is the byte-identical mandate copy. Hash, path, unexpected-file, and symlink checks protect prior and durable content. `run` is foreground-only and must be invoked again to continue.
+
+Immediately before bounded delegation, Loop Engine creates the current `artifacts/cycle-<cycle>/` directory from the host process so generated files inherit that existing directory's permissions. This is a narrow mitigation and does not claim to resolve every native Windows Codex sandbox issue.
+
+This milestone does not implement owner evidence ingestion, escalation resolution, external outreach, background operation, target-repository mutation, or generic execution routing. It supports one active mandate and one bounded objective at a time, and retains the known immutable Objective lifecycle limitation.
