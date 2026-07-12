@@ -1,5 +1,7 @@
 # Loop Engine
 
+> **Project status:** Loop Engine is an archived research prototype. Phase 6 is the final validated milestone. Development has concluded; this repository is not production-ready and no later phase is actively planned.
+
 Loop Engine is a thin executive harness for long-horizon, evidence-driven goal pursuit. It gives powerful existing agents a durable owner mandate, persistent decision-relevant state, evidence and artifact references, authority and escalation boundaries, and an outer feedback loop.
 
 The executive model reads the current durable workspace and dynamically chooses the next bounded objective. Loop Engine then delegates that objective to an existing execution capability, such as Codex, research or browser tools, an external coding-agent orchestrator, or a future specialized tool. The resulting evidence and artifact references return to the workspace before the executive chooses what happens next.
@@ -22,21 +24,21 @@ The existing `TaskGraph` runtime remains available as an optional lower-level ex
 
 ## Status
 
-Loop Engine is pre-alpha and under active development.
+The completed prototype demonstrated:
 
-Already implemented:
-
-- company domain models;
+- durable owner mandates;
+- persistent decision-relevant state;
 - deterministic executive transitions;
-- durable local JSON persistence;
-- bounded execution-domain foundations;
-- one concrete synthetic Phase 5 vertical slice using non-interactive Codex CLI calls; and
-- a durable, resumable Phase 6 multi-cycle Codex runner.
+- executive/executor separation;
+- bounded writable isolation;
+- evidence and artifact persistence;
+- atomic checkpoints;
+- exact crash-recovery reconciliation; and
+- resumable multi-cycle Codex CLI execution.
 
-Not implemented:
+Generic personal-project operation, escalation resolution, execution routing, and real-world dogfooding were not completed. An experimental personal-project workspace was implemented on an intentionally unmerged branch and passed offline tests, but its native-Windows execution encountered sandbox-created artifact permission behavior and did not pass real execution validation.
 
-- a general-purpose model-backed executive or execution-routing layer;
-- a real-world dogfood run.
+Development stopped because first-party goal-oriented agent products reduced the value of continuing Loop Engine as a standalone general orchestration platform. The repository remains useful as a systems-design and agent-infrastructure prototype, including its durable-state boundaries, validation model, recovery semantics, and execution-isolation lessons. See [the project retrospective](docs/project-retrospective.md) for the closure record.
 
 The Phase 5 slice is a controlled demonstration, not general autonomous operation. It uses the existing records, transitions, and local store directly; it does not introduce a worker framework or use `TaskGraph`.
 
@@ -62,7 +64,7 @@ The workspace contains `company-store/` for durable Loop Engine records and a se
 
 Known limitation: Objective 1 is persisted as its original immutable pending record. The vertical slice constructs a terminal-status copy in memory for `apply_objective_result()` and does not persist that lifecycle change. This preserves the existing `Objective` design and intentionally does not add a separate objective-result record.
 
-See [architecture v0.3](docs/architecture-v0.3.md) for the current direction, [architecture v0.2](docs/architecture-v0.2.md) and [architecture v0.1](docs/architecture-v0.1.md) for project history, and [the roadmap](docs/roadmap.md) for the planned implementation sequence.
+See [architecture v0.3](docs/architecture-v0.3.md) for the final architecture direction, [architecture v0.2](docs/architecture-v0.2.md) and [architecture v0.1](docs/architecture-v0.1.md) for project history, and [the roadmap](docs/roadmap.md) for the completed, experimental, and unpursued work.
 
 ## Phase 6 resumable multi-cycle runner
 

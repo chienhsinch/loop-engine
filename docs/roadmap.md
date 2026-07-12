@@ -1,8 +1,8 @@
 # Loop Engine Roadmap
 
-This roadmap takes Loop Engine from its completed foundations to a real multi-cycle demonstration of the thin executive harness described in `architecture-v0.3.md`. Each phase should deliver the smallest inspectable increment and use concrete execution evidence to justify later abstractions.
+Loop Engine concluded as a research prototype after Phase 6, its final validated milestone. This roadmap records completed work, experimental work retained outside the stable main branch, and work that was not pursued. It does not describe active future commitments.
 
-## Completed foundations
+## Completed
 
 ### Phase 0 - Execution core
 
@@ -24,8 +24,6 @@ Implemented local JSON persistence for mandates, the current company-state snaps
 
 Completed the v0.3 boundary: Loop Engine owns the durable mandate, decision-relevant workspace, decision history, evidence references, authority boundaries, human escalation, and the outer loop. Bounded execution is delegated to capable existing agents and tools. `TaskGraph` remains optional, and broader frameworks remain deferred until a real use case provides evidence for them.
 
-## Completed integration phases
-
 ### Phase 5 - End-to-end executive vertical slice
 
 Implemented the shortest concrete path through two evidence-linked executive cycles using non-interactive Codex CLI calls and checked-in JSON Schemas. The synthetic vertical slice now demonstrates, in order:
@@ -42,20 +40,27 @@ The implementation uses canned subprocess outputs in normal orchestration tests 
 
 ### Phase 6 - Durable multi-cycle run
 
-Implemented a concrete foreground Codex runner that crosses process interruptions and repeats the executive -> objective -> execution -> evidence -> state-update cycle. It uses an atomic local checkpoint, deterministic cycle IDs, protected-file snapshots, cycle-isolated artifacts, and idempotent replay. `--max-cycles` counts committed objective executions and stabilizes the workspace by persisting the next executive outcome before exit. The demonstration remains synthetic, retains the immutable Objective lifecycle limitation, and does not resolve escalations.
+Implemented and validated a concrete foreground Codex runner that crosses process interruptions and repeats the executive -> objective -> execution -> evidence -> state-update cycle. It uses an atomic local checkpoint, deterministic cycle IDs, protected-file snapshots, cycle-isolated artifacts, exact crash-recovery reconciliation, and idempotent replay guarded by durable state before external execution. `--max-cycles` counts committed objective executions and stabilizes the workspace by persisting the next executive outcome before exit. Automated validation and a real two-invocation Windows Codex smoke run passed. The demonstration remains synthetic, retains the immutable Objective lifecycle limitation, and does not resolve escalations.
 
-## Next phases
+## Experimental but unmerged
 
-### Phase 7 - Real product-validation mandate
+### Personal-project workspace prototype
 
-Use Loop Engine on one real product-validation mandate. Record the mandate, model-backed decisions, delegated work, evidence and artifact references, state changes, and owner interventions across multiple dynamically selected objectives. Use the run history to determine whether the harness improves continuity and decision quality and to identify the next missing safeguard.
+The `feat/personal-project-workspace` branch implemented a generic personal-project workspace and passed its offline tests. The branch was intentionally not merged, and its closed experimental pull request remains implementation history. It must not be treated as part of the stable Phase 6 milestone or as having passed real execution validation.
 
-Only evidence from the Phase 5 vertical slice and subsequent real runs should justify considering:
+### Native-Windows artifact ACL investigation
 
-- more worker types;
-- richer budget controls;
-- integration of the optional `TaskGraph` subsystem;
-- sophisticated escalation resolution; or
-- parallelism.
+Native-Windows real execution of the personal-project prototype remained blocked by permission behavior on artifacts created inside the Codex sandbox. This was a technically informative host/sandbox filesystem ownership boundary discovered during validation, not a production failure. It showed that an otherwise-correct isolation and persistence architecture can still be invalidated by operating-system ownership and access-control behavior.
 
-Generic workflow DAGs, worker frameworks, agent-to-agent conversation protocols, plugin systems, and simulated organization structures are not roadmap goals without concrete evidence that the thin harness needs them.
+## Not pursued
+
+The project concluded without implementing or validating:
+
+- owner evidence ingestion;
+- escalation resolution;
+- generic execution routing;
+- background operation;
+- real-world dogfooding; and
+- production packaging.
+
+These items are closure boundaries, not active roadmap commitments.
